@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AI 台股量化決策系統</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- TradingView Lightweight Charts CDN -->
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body {
+      background-color: #0d0f12;
+      color: #e2e8f0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .chart-container {
+      position: relative;
+      width: 100%;
+      height: 380px;
+    }
+    /* 綠色脈衝呼吸燈動畫 */
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.9); }
+    }
+    .pulse-live {
+      animation: pulse-glow 2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="p-3 sm:p-6 max-w-xl mx-auto flex flex-col gap-4">
+
+  <!-- 頂部標題與即時更新狀態列 -->
+  <header class="flex flex-col gap-3">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <h1 class="text-xl font-bold tracking-wider text-emerald-400">📈 QUANT STOCK</h1>
+        <div class="flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-live"></span>
+          <span id="refreshTimer" class="text-[10px] text-emerald-300 font-mono">10s 刷新</span>
+        </div>
+      </div>
+      <span id="lastUpdated" class="text-[11px] text-zinc-500 font-mono">--:--:--</span>
+    </div>
+
+    <!-- 搜尋框區塊 -->
+    <div class="relative">
+      <div class="flex items-center bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 focus-within:border-emerald-500 transition">
+        <svg class="w-5 h-5 text-zinc-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <input 
+          id="searchInput" 
+          type="text" 
+          placeholder="搜尋股票代號或名稱 (例: 2330, 台積電, 0050)" 
+          class="bg-transparent text-sm w-full outline-none text-white placeholder-zinc-500"
+          autocomplete="off"
+        >
+      </div>
+
+      <!-- 模糊搜尋下拉清單 -->
+      <ul id="searchResults" class="absolute z-50 left-0 right-0 mt-1.5 bg-zinc-900 border border-zinc-800 rounded-xl max-h-56 overflow-y-auto hidden shadow-2xl divide-y divide-zinc-800/50">
+      </ul>
+    </div>
+  </header>
+
+  <!-- 當前股票資訊與即時診斷卡片 -->
+  <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3 shadow-lg">
+    <div class="flex justify-between items-start">
+      <div>
+        <div class="flex items-baseline gap-2">
+          <h2 id="stockName" class="text-2xl font-bold text-white">台積電</h2>
+          <span id="stockSymbol" class="text-sm font-mono text-zinc-400">2330</span>
+        </div>
+        <p id="latestPrice" class="text-3xl font-extrabold text-red-500 mt-1">-- <span class="text-sm text-zinc-400 font-normal">TWD</span></p>
+      </div>
+
+      <!-- 訊號徽章 -->
+      <div id="signalBadge" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700 text-center">
+        運算中...
+      </div>
+    </div>
+
+    <!-- 關鍵指標面板 -->
+    <div class="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800 text-center">
+      <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
+        <span class="text-[11px] text-zinc-400">RSI 強弱 (14)</span>
+        <p id="rsiValue" class="text-sm font-semibold text-white mt-0.5">--</p>
+      </div>
+      <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
+        <span class="text-[11px] text-zinc-400">今日量能比</span>
+        <p id="volRatioValue" class="text-sm font-semibold text-white mt-0.5">--</p>
+      </div>
+      <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
+        <span class="text-[11px] text-zinc-400">防守停損價</span>
+        <p id="stopLossValue" class="text-sm font-semibold text-yellow-500 mt-0.5">--</p>
+      </div>
+    </div>
+
+    <!-- 決策原因文字說明 -->
+    <div class="bg-zinc-950/40 p-2.5 rounded-xl text-xs text-zinc-400 border border-zinc-800/50">
+      <span class="text-zinc-300 font-medium">量化觀點：</span>
+      <span id="signalReason">讀取中...</span>
+    </div>
+  </section>
+
+  <!-- TradingView K 線圖表 -->
+  <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-3 shadow-lg">
+    <div class="flex justify-between items-center mb-2 px-1">
+      <span class="text-xs font-medium text-zinc-400">日 K 歷史走勢 (可雙指滑動縮放)</span>
+      <span class="text-[10px] text-zinc-500">單位: 日線</span>
+    </div>
+    <div id="chart" class="chart-container rounded-xl overflow-hidden"></div>
+  </section>
+
+  <script>
+    const API_BASE = window.location.origin;
+    let currentSymbol = "2330";
+    let chart, candleSeries, volumeSeries;
+    let pollInterval = null;
+    let countdownInterval = null;
+    let secondsLeft = 10;
+
+    // 1. 初始化 TradingView 圖表
+    function initChart() {
+      const container = document.getElementById('chart');
+      chart = LightweightCharts.createChart(container, {
+        layout: {
+          backgroundColor: '#0d0f12',
+          textColor: '#94a3b8',
+          fontSize: 11
+        },
+        grid: {
+          vertLines: { color: 'rgba(42, 46, 57, 0.4)' },
+          horzLines: { color: 'rgba(42, 46, 57, 0.4)' }
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+        },
+        rightPriceScale: {
+          borderColor: '#262932',
+        },
+        timeScale: {
+          borderColor: '#262932',
+          timeVisible: true,
+        },
+      });
+
+      candleSeries = chart.addCandlestickSeries({
+        upColor: '#ef4444',
+        downColor: '#22c55e',
+        borderUpColor: '#ef4444',
+        borderDownColor: '#22c55e',
+        wickUpColor: '#ef4444',
+        wickDownColor: '#22c55e',
+      });
+
+      volumeSeries = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: '',
+        scaleMargins: { top: 0.8, bottom: 0 },
+      });
+
+      window.addEventListener('resize', () => {
+        chart.applyOptions({ width: container.clientWidth });
+      });
+      chart.applyOptions({ width: container.clientWidth });
+    }
+
+    // 2. 載入資料（isSilent 為 true 時不重設圖表視野，避免打擾使用者縮放）
+    async function fetchStockData(symbol, isSilent = false) {
+      try {
+        // 並行取得 K 線與即時訊號
+        const [resKline, resSignal] = await Promise.all([
+          fetch(`${API_BASE}/api/stocks/${symbol}/kline`),
+          fetch(`${API_BASE}/api/stocks/${symbol}/signal`)
+        ]);
+
+        if (!resKline.ok || !resSignal.ok) return;
+
+        const klineData = await resKline.json();
+        const sig = await resSignal.json();
+
+        // 更新圖表數據
+        candleSeries.setData(klineData.kline);
+        volumeSeries.setData(klineData.volume);
+        
+        // 只有第一次載入才 fitContent()，輪詢時保留使用者的縮放視角
+        if (!isSilent) {
+          chart.timeScale().fitContent();
+        }
+
+        // 更新診斷卡片數據
+        document.getElementById('latestPrice').innerHTML = `${sig.latest_close} <span class="text-sm text-zinc-400 font-normal">TWD</span>`;
+        document.getElementById('rsiValue').innerText = sig.rsi;
+        document.getElementById('volRatioValue').innerText = `${sig.volume_ratio}x`;
+        document.getElementById('stopLossValue').innerText = sig.stop_loss_price > 0 ? `${sig.stop_loss_price}` : '未設';
+        document.getElementById('signalReason').innerText = sig.reasons.length > 0 ? sig.reasons.join('；') : '盤勢平穩，無顯著訊號。';
+
+        // 訊號徽章
+        const badge = document.getElementById('signalBadge');
+        badge.innerText = sig.signal;
+        if (sig.signal.includes("買進")) {
+          badge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-red-950/80 text-red-400 border border-red-700/60";
+        } else if (sig.signal.includes("賣出")) {
+          badge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-700/60";
+        } else {
+          badge.className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700";
+        }
+
+        // 更新右上角最後更新時間戳記
+        const now = new Date();
+        document.getElementById('lastUpdated').innerText = now.toTimeString().split(' ')[0];
+
+      } catch (err) {
+        console.error("輪詢更新失敗:", err);
+      }
+    }
+
+    // 3. 啟動定時輪詢與倒數計時器
+    function startPolling(symbol) {
+      // 先清理舊的定時器
+      if (pollInterval) clearInterval(pollInterval);
+      if (countdownInterval) clearInterval(countdownInterval);
+
+      secondsLeft = 10;
+      const timerEl = document.getElementById('refreshTimer');
+      timerEl.innerText = `${secondsLeft}s 刷新`;
+
+      // 1 秒跑一次倒數
+      countdownInterval = setInterval(() => {
+        secondsLeft -= 1;
+        if (secondsLeft <= 0) {
+          secondsLeft = 10;
+        }
+        timerEl.innerText = `${secondsLeft}s 刷新`;
+      }, 1000);
+
+      // 每 10 秒向後端發送一次靜默更新
+      pollInterval = setInterval(() => {
+        fetchStockData(symbol, true);
+      }, 10000);
+    }
+
+    // 切換股票標的
+    async function loadStock(symbol, name = "") {
+      currentSymbol = symbol;
+      document.getElementById('stockSymbol').innerText = symbol;
+      if (name) document.getElementById('stockName').innerText = name;
+
+      // 立即抓取一次（非靜默模式，重置視角）
+      await fetchStockData(symbol, false);
+
+      // 重啟定時輪詢
+      startPolling(symbol);
+    }
+
+    // 4. 搜尋防抖邏輯
+    let debounceTimer;
+    const searchInput = document.getElementById('searchInput');
+    const searchResults = document.getElementById('searchResults');
+
+    searchInput.addEventListener('input', (e) => {
+      clearTimeout(debounceTimer);
+      const query = e.target.value.trim();
+      if (!query) {
+        searchResults.classList.add('hidden');
+        return;
+      }
+      debounceTimer = setTimeout(async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/stocks/search?q=${encodeURIComponent(query)}`);
+          const list = await res.json();
+          if (list.length > 0) {
+            searchResults.innerHTML = list.map(item => `
+              <li class="px-4 py-3 hover:bg-zinc-800 cursor-pointer flex justify-between items-center transition" onclick="selectStock('${item.symbol}', '${item.name}')">
+                <span class="font-medium text-white">${item.name} <span class="text-xs text-zinc-400 font-mono ml-1">${item.symbol}</span></span>
+                <span class="text-xs text-zinc-500 bg-zinc-800/80 px-2 py-0.5 rounded border border-zinc-700/50">${item.market}</span>
+              </li>
+            `).join('');
+            searchResults.classList.remove('hidden');
+          } else {
+            searchResults.classList.add('hidden');
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 250);
+    });
+
+    function selectStock(symbol, name) {
+      searchResults.classList.add('hidden');
+      searchInput.value = '';
+      loadStock(symbol, name);
+    }
+
+    document.addEventListener('click', (e) => {
+      if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+        searchResults.classList.add('hidden');
+      }
+    });
+
+    window.onload = () => {
+      initChart();
+      loadStock("2330", "台積電");
+    };
+  </script>
+</body>
+</html>
