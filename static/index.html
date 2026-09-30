@@ -6,8 +6,8 @@
   <title>AI 台股量化決策系統</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- TradingView Lightweight Charts CDN -->
-  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- 強制指定穩定版 4.2.1，徹底杜絕版本 API 衝突 -->
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     body {
       background-color: #0d0f12;
@@ -19,7 +19,6 @@
       width: 100%;
       height: 380px;
     }
-    /* 綠色脈衝呼吸燈動畫 */
     @keyframes pulse-glow {
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.4; transform: scale(0.9); }
@@ -111,23 +110,27 @@
       <span class="text-xs font-medium text-zinc-400">日 K 歷史走勢 (可雙指滑動縮放)</span>
       <span class="text-[10px] text-zinc-500">單位: 日線</span>
     </div>
-    <div id="chart" class="chart-container rounded-xl overflow-hidden"></div>
+    <div id="chart" class="chart-container rounded-xl overflow-hidden bg-[#0d0f12]"></div>
   </section>
 
   <script>
-    const API_BASE = window.location.origin;
+    // 自動判定 API 網址：如果不是透過 8000 打開，自動連到 8000
+    const API_BASE = window.location.port === "8000" 
+      ? window.location.origin 
+      : `${window.location.protocol}//${window.location.hostname}:8000`;
+
     let currentSymbol = "2330";
     let chart, candleSeries, volumeSeries;
     let pollInterval = null;
     let countdownInterval = null;
     let secondsLeft = 10;
 
-    // 1. 初始化 TradingView 圖表
+    // 1. 初始化 TradingView 圖表 (相容 v4 與 v5 雙版本)
     function initChart() {
       const container = document.getElementById('chart');
       chart = LightweightCharts.createChart(container, {
         layout: {
-          backgroundColor: '#0d0f12',
+          background: { color: '#0d0f12' },
           textColor: '#94a3b8',
           fontSize: 11
         },
@@ -147,20 +150,29 @@
         },
       });
 
-      candleSeries = chart.addCandlestickSeries({
+      const candleOptions = {
         upColor: '#ef4444',
         downColor: '#22c55e',
         borderUpColor: '#ef4444',
         borderDownColor: '#22c55e',
         wickUpColor: '#ef4444',
         wickDownColor: '#22c55e',
-      });
+      };
 
-      volumeSeries = chart.addHistogramSeries({
+      const volumeOptions = {
         priceFormat: { type: 'volume' },
         priceScaleId: '',
         scaleMargins: { top: 0.8, bottom: 0 },
-      });
+      };
+
+      // 版本相容性檢查：若為 v4 走舊方法，若為 v5 走新方法
+      if (typeof chart.addCandlestickSeries === 'function') {
+        candleSeries = chart.addCandlestickSeries(candleOptions);
+        volumeSeries = chart.addHistogramSeries(volumeOptions);
+      } else {
+        candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions);
+        volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, volumeOptions);
+      }
 
       window.addEventListener('resize', () => {
         chart.applyOptions({ width: container.clientWidth });
@@ -168,37 +180,38 @@
       chart.applyOptions({ width: container.clientWidth });
     }
 
-    // 2. 載入資料（isSilent 為 true 時不重設圖表視野，避免打擾使用者縮放）
+    // 2. 抓取資料
     async function fetchStockData(symbol, isSilent = false) {
       try {
-        // 並行取得 K 線與即時訊號
         const [resKline, resSignal] = await Promise.all([
           fetch(`${API_BASE}/api/stocks/${symbol}/kline`),
           fetch(`${API_BASE}/api/stocks/${symbol}/signal`)
         ]);
 
-        if (!resKline.ok || !resSignal.ok) return;
+        if (!resKline.ok || !resSignal.ok) {
+          console.error("API 回傳異常", resKline.status, resSignal.status);
+          return;
+        }
 
         const klineData = await resKline.json();
         const sig = await resSignal.json();
 
-        // 更新圖表數據
+        // 渲染圖表
         candleSeries.setData(klineData.kline);
         volumeSeries.setData(klineData.volume);
         
-        // 只有第一次載入才 fitContent()，輪詢時保留使用者的縮放視角
         if (!isSilent) {
           chart.timeScale().fitContent();
         }
 
-        // 更新診斷卡片數據
+        // 渲染面板數值
         document.getElementById('latestPrice').innerHTML = `${sig.latest_close} <span class="text-sm text-zinc-400 font-normal">TWD</span>`;
         document.getElementById('rsiValue').innerText = sig.rsi;
         document.getElementById('volRatioValue').innerText = `${sig.volume_ratio}x`;
         document.getElementById('stopLossValue').innerText = sig.stop_loss_price > 0 ? `${sig.stop_loss_price}` : '未設';
         document.getElementById('signalReason').innerText = sig.reasons.length > 0 ? sig.reasons.join('；') : '盤勢平穩，無顯著訊號。';
 
-        // 訊號徽章
+        // 訊號徽章更新
         const badge = document.getElementById('signalBadge');
         badge.innerText = sig.signal;
         if (sig.signal.includes("買進")) {
@@ -209,18 +222,16 @@
           badge.className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700";
         }
 
-        // 更新右上角最後更新時間戳記
         const now = new Date();
         document.getElementById('lastUpdated').innerText = now.toTimeString().split(' ')[0];
 
       } catch (err) {
-        console.error("輪詢更新失敗:", err);
+        console.error("資料載入出錯:", err);
       }
     }
 
-    // 3. 啟動定時輪詢與倒數計時器
+    // 3. 輪詢計時器
     function startPolling(symbol) {
-      // 先清理舊的定時器
       if (pollInterval) clearInterval(pollInterval);
       if (countdownInterval) clearInterval(countdownInterval);
 
@@ -228,35 +239,27 @@
       const timerEl = document.getElementById('refreshTimer');
       timerEl.innerText = `${secondsLeft}s 刷新`;
 
-      // 1 秒跑一次倒數
       countdownInterval = setInterval(() => {
         secondsLeft -= 1;
-        if (secondsLeft <= 0) {
-          secondsLeft = 10;
-        }
+        if (secondsLeft <= 0) secondsLeft = 10;
         timerEl.innerText = `${secondsLeft}s 刷新`;
       }, 1000);
 
-      // 每 10 秒向後端發送一次靜默更新
       pollInterval = setInterval(() => {
         fetchStockData(symbol, true);
       }, 10000);
     }
 
-    // 切換股票標的
     async function loadStock(symbol, name = "") {
       currentSymbol = symbol;
       document.getElementById('stockSymbol').innerText = symbol;
       if (name) document.getElementById('stockName').innerText = name;
 
-      // 立即抓取一次（非靜默模式，重置視角）
       await fetchStockData(symbol, false);
-
-      // 重啟定時輪詢
       startPolling(symbol);
     }
 
-    // 4. 搜尋防抖邏輯
+    // 4. 搜尋列邏輯
     let debounceTimer;
     const searchInput = document.getElementById('searchInput');
     const searchResults = document.getElementById('searchResults');

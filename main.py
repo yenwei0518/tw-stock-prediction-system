@@ -1,21 +1,14 @@
 # main.py
 import os
-import re
-from typing import Dict, List, Optional
+import traceback
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 import pandas as pd
 import yfinance as yf
 
-app = FastAPI(
-    title="AI 台股量化決策系統",
-    description="提供全台股搜尋、TradingView 格式 K 線與量化買賣診斷訊號",
-    version="1.0.0"
-)
+app = FastAPI(title="AI 台股量化決策系統")
 
-# 跨域支援
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,17 +17,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 讀取全台股資產庫
 try:
     STOCKS_DF = pd.read_csv("tw_stocks.csv", dtype={"symbol": str}).fillna("")
-    print(f"後端成功載入 {len(STOCKS_DF)} 檔股票資料！")
+    print(f"✅ 成功載入 {len(STOCKS_DF)} 檔股票資料")
 except Exception as e:
-    print(f"讀取 tw_stocks.csv 失敗: {e}")
+    print(f"⚠ 讀取 tw_stocks.csv 失敗: {e}")
     STOCKS_DF = pd.DataFrame()
 
-
 def get_ticker_symbol(symbol: str) -> str:
-    """自動判定加 .TW 或 .TWO"""
     symbol = str(symbol).strip()
     if not STOCKS_DF.empty:
         match = STOCKS_DF[STOCKS_DF['symbol'] == symbol]
@@ -43,6 +33,15 @@ def get_ticker_symbol(symbol: str) -> str:
             return f"{symbol}.TWO" if market == "上櫃" else f"{symbol}.TW"
     return f"{symbol}.TW"
 
+def clean_yfinance_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """展平 MultiIndex 並統一欄位名稱，避免 500 錯誤"""
+    if df.empty:
+        return df
+    if isinstance(df.columns, pd.MultiIndex):
+        # 取第一層欄位名 (Open, High, Low, Close, Volume)
+        df.columns = [col[0] for col in df.columns]
+    df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
+    return df.sort_index()
 
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
@@ -51,10 +50,7 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-
-# ---------------- API 端點 ----------------
-
-@app.get("/api/stocks/search", summary="全台股即時模糊搜尋")
+@app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
     if STOCKS_DF.empty:
         return []
@@ -65,108 +61,110 @@ def search_stocks(q: str = Query(..., min_length=1)):
     ]
     return matched.head(10).to_dict(orient="records")
 
-
-@app.get("/api/stocks/{symbol}/kline", summary="取得 TradingView 格式 K 線")
+@app.get("/api/stocks/{symbol}/kline")
 def get_kline(symbol: str, period: str = "6mo"):
-    ticker = get_ticker_symbol(symbol)
-    df = yf.download(ticker, period=period, interval="1d", progress=False)
-    
-    if df.empty:
-        raise HTTPException(status_code=404, detail="找不到該股票資料")
-    
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] for col in df.columns]
+    try:
+        ticker = get_ticker_symbol(symbol)
+        df = yf.download(ticker, period=period, interval="1d", progress=False)
+        df = clean_yfinance_dataframe(df)
 
-    kline_data = []
-    volume_data = []
+        if df.empty:
+            raise HTTPException(status_code=404, detail="無歷史資料")
 
-    for idx, row in df.iterrows():
-        time_str = idx.strftime("%Y-%m-%d")
-        o = round(float(row['Open']), 2)
-        h = round(float(row['High']), 2)
-        l = round(float(row['Low']), 2)
-        c = round(float(row['Close']), 2)
-        v = int(row['Volume'])
+        kline_data = []
+        volume_data = []
 
-        kline_data.append({"time": time_str, "open": o, "high": h, "low": l, "close": c})
-        volume_data.append({
-            "time": time_str,
-            "value": v,
-            "color": "rgba(239, 83, 80, 0.5)" if c >= o else "rgba(38, 166, 154, 0.5)"
-        })
+        for idx, row in df.iterrows():
+            time_str = idx.strftime("%Y-%m-%d")
+            o = round(float(pd.Series(row['Open']).iloc[0] if isinstance(row['Open'], pd.Series) else row['Open']), 2)
+            h = round(float(pd.Series(row['High']).iloc[0] if isinstance(row['High'], pd.Series) else row['High']), 2)
+            l = round(float(pd.Series(row['Low']).iloc[0] if isinstance(row['Low'], pd.Series) else row['Low']), 2)
+            c = round(float(pd.Series(row['Close']).iloc[0] if isinstance(row['Close'], pd.Series) else row['Close']), 2)
+            v = int(pd.Series(row['Volume']).iloc[0] if isinstance(row['Volume'], pd.Series) else row['Volume'])
 
-    return {"symbol": symbol, "kline": kline_data, "volume": volume_data}
+            kline_data.append({"time": time_str, "open": o, "high": h, "low": l, "close": c})
+            volume_data.append({
+                "time": time_str,
+                "value": v,
+                "color": "rgba(239, 83, 80, 0.5)" if c >= o else "rgba(38, 166, 154, 0.5)"
+            })
 
+        return {"symbol": symbol, "kline": kline_data, "volume": volume_data}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"K 線運算錯誤: {str(e)}")
 
-@app.get("/api/stocks/{symbol}/signal", summary="取得量化買賣診斷")
+@app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
-    ticker = get_ticker_symbol(symbol)
-    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+    try:
+        ticker = get_ticker_symbol(symbol)
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        df = clean_yfinance_dataframe(df)
 
-    if df.empty or len(df) < 25:
-        raise HTTPException(status_code=404, detail="歷史資料不足以運算指標")
+        if len(df) < 20:
+            raise HTTPException(status_code=404, detail="交易日歷史資料不足")
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] for col in df.columns]
+        # 確保為一維 Series
+        close_series = df['Close']
+        if isinstance(close_series, pd.DataFrame):
+            close_series = close_series.iloc[:, 0]
 
-    df['MA5'] = df['Close'].rolling(window=5).mean()
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
-    df['RSI'] = calculate_rsi(df['Close'], period=14)
+        vol_series = df['Volume']
+        if isinstance(vol_series, pd.DataFrame):
+            vol_series = vol_series.iloc[:, 0]
 
-    today = df.iloc[-1]
-    yesterday = df.iloc[-2]
+        ma5 = close_series.rolling(window=5).mean()
+        ma20 = close_series.rolling(window=20).mean()
+        vol_ma5 = vol_series.rolling(window=5).mean()
+        rsi_series = calculate_rsi(close_series, period=14)
 
-    close_price = round(float(today['Close']), 2)
-    today_rsi = round(float(today['RSI']), 2) if pd.notnull(today['RSI']) else 50.0
-    vol_ratio = round(float(today['Volume'] / today['Vol_MA5']), 2) if today['Vol_MA5'] > 0 else 1.0
+        close_price = round(float(close_series.iloc[-1]), 2)
+        today_rsi = round(float(rsi_series.iloc[-1]), 2) if pd.notnull(rsi_series.iloc[-1]) else 50.0
+        today_vol = float(vol_series.iloc[-1])
+        recent_vol_ma5 = float(vol_ma5.iloc[-1]) if vol_ma5.iloc[-1] > 0 else 1.0
+        vol_ratio = round(today_vol / recent_vol_ma5, 2)
 
-    is_golden_cross = (yesterday['MA5'] <= yesterday['MA20']) and (today['MA5'] > today['MA20'])
-    is_death_cross = (yesterday['MA5'] >= yesterday['MA20']) and (today['MA5'] < today['MA20'])
-    is_volume_up = vol_ratio >= 1.3
+        is_golden_cross = (ma5.iloc[-2] <= ma20.iloc[-2]) and (ma5.iloc[-1] > ma20.iloc[-1])
+        is_death_cross = (ma5.iloc[-2] >= ma20.iloc[-2]) and (ma5.iloc[-1] < ma20.iloc[-1])
+        is_volume_up = vol_ratio >= 1.3
 
-    signal = "觀望 (HOLD)"
-    reasons = []
-    stop_loss = 0.0
+        signal = "觀望 (HOLD)"
+        reasons = []
+        stop_loss = 0.0
 
-    if is_golden_cross and is_volume_up:
-        signal = "強烈建議買進 (STRONG BUY)"
-        reasons.append("MA5 向上突破 MA20 (黃金交叉)")
-        reasons.append(f"成交量放大為 5 日均量之 {vol_ratio} 倍 (帶量突破)")
-        stop_loss = round(close_price * 0.96, 2)
-    elif today['MA5'] > today['MA20']:
-        if today_rsi > 80:
-            signal = "警示：短線過熱 (OVERBOUGHT)"
-            reasons.append(f"RSI 達 {today_rsi}，進入超買區，慎防回檔")
-        else:
-            signal = "多頭持有 (BULLISH HOLD)"
-            reasons.append("股價站穩月線 (MA20) 之上，維持多方走勢")
-            stop_loss = round(float(today['MA20']), 2)
-    elif is_death_cross or today['MA5'] < today['MA20']:
-        signal = "建議減碼/賣出 (SELL)"
-        reasons.append("股價跌破月線或出現 MA5 死亡交叉，轉為弱勢")
+        if is_golden_cross and is_volume_up:
+            signal = "強烈建議買進 (STRONG BUY)"
+            reasons.append("MA5 向上突破 MA20 (黃金交叉)")
+            reasons.append(f"成交量放大為 5 日均量之 {vol_ratio} 倍 (帶量突破)")
+            stop_loss = round(close_price * 0.96, 2)
+        elif ma5.iloc[-1] > ma20.iloc[-1]:
+            if today_rsi > 80:
+                signal = "警示：短線過熱 (OVERBOUGHT)"
+                reasons.append(f"RSI 達 {today_rsi}，進入超買區，慎防回檔")
+            else:
+                signal = "多頭持有 (BULLISH HOLD)"
+                reasons.append("股價站穩月線 (MA20) 之上，維持多方走勢")
+                stop_loss = round(float(ma20.iloc[-1]), 2)
+        elif is_death_cross or ma5.iloc[-1] < ma20.iloc[-1]:
+            signal = "建議減碼/賣出 (SELL)"
+            reasons.append("股價跌破月線或出現 MA5 死亡交叉，轉為弱勢")
 
-    return {
-        "symbol": symbol,
-        "latest_close": close_price,
-        "rsi": today_rsi,
-        "volume_ratio": vol_ratio,
-        "signal": signal,
-        "reasons": reasons,
-        "stop_loss_price": stop_loss
-    }
+        return {
+            "symbol": symbol,
+            "latest_close": close_price,
+            "rsi": today_rsi,
+            "volume_ratio": vol_ratio,
+            "signal": signal,
+            "reasons": reasons,
+            "stop_loss_price": stop_loss
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"訊號運算錯誤: {str(e)}")
 
-
-# ---------------- 網頁前端託管 ----------------
-
-# 掛載 static 目錄
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# 訪問根目錄 (首頁) 時，直接回傳黑底網頁
 @app.get("/", include_in_schema=False)
 def serve_index():
-    index_file = os.path.join("static", "index.html")
-    if os.path.exists(index_file):
-        return FileResponse(index_file)
-    return {"message": "找不到 static/index.html，請確認檔案位置"}
+    for path in ["static/index.html", "index.html"]:
+        if os.path.exists(path):
+            return FileResponse(path)
+    return {"message": "找不到 index.html"}
