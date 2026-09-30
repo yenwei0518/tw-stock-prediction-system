@@ -71,8 +71,18 @@ def get_kline(symbol: str, period: str = "6mo"):
         if df.empty:
             raise HTTPException(status_code=404, detail="無歷史資料")
 
+        # 計算 MA5 與 MA20
+        close_s = df['Close']
+        if isinstance(close_s, pd.DataFrame):
+            close_s = close_s.iloc[:, 0]
+            
+        df['MA5'] = close_s.rolling(window=5).mean()
+        df['MA20'] = close_s.rolling(window=20).mean()
+
         kline_data = []
         volume_data = []
+        ma5_data = []
+        ma20_data = []
 
         for idx, row in df.iterrows():
             time_str = idx.strftime("%Y-%m-%d")
@@ -89,7 +99,22 @@ def get_kline(symbol: str, period: str = "6mo"):
                 "color": "rgba(239, 83, 80, 0.5)" if c >= o else "rgba(38, 166, 154, 0.5)"
             })
 
-        return {"symbol": symbol, "kline": kline_data, "volume": volume_data}
+            # 若有 MA 數值則加入，忽略開頭的 NaN
+            m5 = row['MA5'] if not isinstance(row['MA5'], pd.Series) else row['MA5'].iloc[0]
+            m20 = row['MA20'] if not isinstance(row['MA20'], pd.Series) else row['MA20'].iloc[0]
+
+            if pd.notnull(m5):
+                ma5_data.append({"time": time_str, "value": round(float(m5), 2)})
+            if pd.notnull(m20):
+                ma20_data.append({"time": time_str, "value": round(float(m20), 2)})
+
+        return {
+            "symbol": symbol,
+            "kline": kline_data,
+            "volume": volume_data,
+            "ma5": ma5_data,
+            "ma20": ma20_data
+        }
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"K 線運算錯誤: {str(e)}")
