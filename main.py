@@ -1,14 +1,21 @@
-# main.py
 import os
-import traceback
-from fastapi import FastAPI, HTTPException, Query
+from typing import Optional, List, Dict, Any
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-import pandas as pd
+from pydantic import BaseModel, field_validator
 import yfinance as yf
+import pandas as pd
+import numpy as np
 
-app = FastAPI(title="AI 台股量化決策系統")
+app = FastAPI(
+    title="AI 台股量化決策終端 API",
+    description="提供台股即時走勢、均線、RSI、籌碼量能、基本面財務數據與量化買賣訊號",
+    version="2.0.0"
+)
 
+# 允許跨域請求 (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,67 +24,152 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-try:
-    STOCKS_DF = pd.read_csv("tw_stocks.csv", dtype={"symbol": str}).fillna("")
-    print(f"✅ 成功載入 {len(STOCKS_DF)} 檔股票資料")
-except Exception as e:
-    print(f"⚠ 讀取 tw_stocks.csv 失敗: {e}")
-    STOCKS_DF = pd.DataFrame()
+# 常見上櫃 (TWO) 代碼清單，其餘預設加上 .TW
+OTC_SYMBOLS = {"6547", "3293", "8069", "5483", "6488", "3131", "3529", "8299", "6274"}
+
+# 預設熱門股票清單 (用於模糊搜尋推薦)
+POPULAR_STOCKS = [
+    {"symbol": "2330", "name": "台積電", "market": "上市"},
+    {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
+    {"symbol": "2454", "name": "聯發科", "market": "上市"},
+    {"symbol": "2317", "name": "鴻海", "market": "上市"},
+    {"symbol": "2382", "name": "廣達", "market": "上市"},
+    {"symbol": "2308", "name": "台達電", "market": "上市"},
+    {"symbol": "2881", "name": "富邦金", "market": "上市"},
+    {"symbol": "2882", "name": "國泰金", "market": "上市"},
+    {"symbol": "2603", "name": "長榮", "market": "上市"},
+    {"symbol": "3231", "name": "緯創", "market": "上市"},
+    {"symbol": "2376", "name": "技嘉", "market": "上市"},
+    {"symbol": "0056", "name": "元大高股息", "market": "ETF"},
+    {"symbol": "00878", "name": "國泰永續高股息", "market": "ETF"},
+    {"symbol": "00919", "name": "群益台灣精選高息", "market": "ETF"},
+    {"symbol": "00929", "name": "復華台灣科技優息", "market": "ETF"},
+]
+
 
 def get_ticker_symbol(symbol: str) -> str:
-    symbol = str(symbol).strip()
-    if not STOCKS_DF.empty:
-        match = STOCKS_DF[STOCKS_DF['symbol'] == symbol]
-        if not match.empty:
-            market = match.iloc[0].get('market', '')
-            return f"{symbol}.TWO" if market == "上櫃" else f"{symbol}.TW"
-    return f"{symbol}.TW"
+    """轉換台股代號為 Yahoo Finance 相容格式"""
+    sym = symbol.strip().upper()
+    if sym.endswith(".TW") or sym.endswith(".TWO"):
+        return sym
+    if sym in OTC_SYMBOLS:
+        return f"{sym}.TWO"
+    return f"{sym}.TW"
 
-def clean_yfinance_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """展平 MultiIndex 並統一欄位名稱，避免 500 錯誤"""
-    if df.empty:
-        return df
-    if isinstance(df.columns, pd.MultiIndex):
-        # 取第一層欄位名 (Open, High, Low, Close, Volume)
-        df.columns = [col[0] for col in df.columns]
-    df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
-    return df.sort_index()
 
-def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+# ==========================================
+# 1. Pydantic v2 基本面資料清洗模型
+# ==========================================
+class FundamentalData(BaseModel):
+    pe: Optional[float] = None
+    eps: Optional[float] = None
+    yield_rate: Optional[float] = None
+    market_cap: Optional[float] = None
+
+    @field_validator("pe", "eps", "yield_rate", "market_cap", mode="before")
+    @classmethod
+    def clean_financial_metrics(cls, val: object) -> Optional[float]:
+        # 攔截空值或 Yahoo 的佔位符號
+        if val is None or val in ("--", "N/A", "NA", "-", "", "None", "null"):
+            return None
+
+        # 數值型別直接轉換
+        if isinstance(val, (int, float)):
+            return float(val)
+
+        # 字串型別清除雜訊 (逗號、百分比)
+        if isinstance(val, str):
+            clean_str = val.replace(",", "").replace("%", "").strip()
+            if clean_str in ("--", "N/A", "NA", "-", "", "None", "null"):
+                return None
+            try:
+                return float(clean_str)
+            except ValueError:
+                return None
+
+        return None
+
+    def to_display_dict(self) -> dict:
+        """轉換為前端易讀的格式化字串"""
+        mcap_str = "--"
+        if self.market_cap and self.market_cap > 0:
+            if self.market_cap >= 1e12:
+                mcap_str = f"{round(self.market_cap / 1e12, 2)} 兆"
+            elif self.market_cap >= 1e8:
+                mcap_str = f"{round(self.market_cap / 1e8, 2)} 億"
+            else:
+                mcap_str = f"{int(self.market_cap):,}"
+
+        yield_str = "--"
+        if self.yield_rate and self.yield_rate > 0:
+            rate = self.yield_rate * 100 if self.yield_rate < 1 else self.yield_rate
+            yield_str = f"{round(rate, 2)}%"
+
+        return {
+            "pe": f"{round(self.pe, 2)} 倍" if self.pe and self.pe > 0 else "--",
+            "eps": f"{round(self.eps, 2)} 元" if self.eps is not None else "--",
+            "yield": yield_str,
+            "market_cap": mcap_str,
+        }
+
+
+# ==========================================
+# 2. 技術指標輔助計算函式
+# ==========================================
+def calculate_rsi(series: pd.Series, period: int = 14) -> float:
+    """計算 14 日 RSI 相對強弱指標"""
+    if len(series) < period + 1:
+        return 50.0
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    val = rsi.iloc[-1]
+    return round(float(val), 2) if not np.isnan(val) else 50.0
 
+
+# ==========================================
+# 3. 核心 API 端點
+# ==========================================
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
-    if STOCKS_DF.empty:
-        return []
+    """股票模糊搜尋 (支援代碼與中文名稱)"""
     query = q.strip().lower()
-    matched = STOCKS_DF[
-        STOCKS_DF['symbol'].str.lower().str.contains(query) | 
-        STOCKS_DF['name'].str.lower().str.contains(query)
+    results = [
+        item for item in POPULAR_STOCKS 
+        if query in item["symbol"].lower() or query in item["name"].lower()
     ]
-    return matched.head(10).to_dict(orient="records")
+    # 若為自訂 4 碼數字且不在預設清單中，自動建立項目
+    if query.isdigit() and len(query) >= 4 and not any(r["symbol"] == query for r in results):
+        results.insert(0, {"symbol": query, "name": f"台股 {query}", "market": "台股"})
+    return results[:8]
+
 
 @app.get("/api/stocks/{symbol}/kline")
-def get_kline(symbol: str, period: str = "6mo"):
+def get_kline(symbol: str):
+    """取得日線 K 棒資料、MA5、MA20 與成交量 (供 lightweight-charts 繪圖)"""
     try:
         ticker = get_ticker_symbol(symbol)
-        df = yf.download(ticker, period=period, interval="1d", progress=False)
-        df = clean_yfinance_dataframe(df)
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
+
+        # 嘗試備用代碼 (例如 .TWO)
+        if df.empty and ticker.endswith(".TW"):
+            ticker_alt = ticker.replace(".TW", ".TWO")
+            df = yf.download(ticker_alt, period="6mo", interval="1d", progress=False, auto_adjust=False)
 
         if df.empty:
-            raise HTTPException(status_code=404, detail="無歷史資料")
+            raise HTTPException(status_code=404, detail=f"查無 {symbol} 的歷史交易資料")
 
-        # 計算 MA5 與 MA20
-        close_s = df['Close']
-        if isinstance(close_s, pd.DataFrame):
-            close_s = close_s.iloc[:, 0]
-            
-        df['MA5'] = close_s.rolling(window=5).mean()
-        df['MA20'] = close_s.rolling(window=20).mean()
+        # 處理 yfinance 可能回傳的多層欄位 (MultiIndex)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        df = df.dropna(subset=['Close'])
+        df['MA5'] = df['Close'].rolling(window=5).mean()
+        df['MA20'] = df['Close'].rolling(window=20).mean()
 
         kline_data = []
         volume_data = []
@@ -85,152 +177,155 @@ def get_kline(symbol: str, period: str = "6mo"):
         ma20_data = []
 
         for idx, row in df.iterrows():
-            time_str = idx.strftime("%Y-%m-%d")
-            o = round(float(pd.Series(row['Open']).iloc[0] if isinstance(row['Open'], pd.Series) else row['Open']), 2)
-            h = round(float(pd.Series(row['High']).iloc[0] if isinstance(row['High'], pd.Series) else row['High']), 2)
-            l = round(float(pd.Series(row['Low']).iloc[0] if isinstance(row['Low'], pd.Series) else row['Low']), 2)
-            c = round(float(pd.Series(row['Close']).iloc[0] if isinstance(row['Close'], pd.Series) else row['Close']), 2)
-            v = int(pd.Series(row['Volume']).iloc[0] if isinstance(row['Volume'], pd.Series) else row['Volume'])
+            date_str = idx.strftime("%Y-%m-%d")
+            o = round(float(row['Open']), 2)
+            h = round(float(row['High']), 2)
+            l = round(float(row['Low']), 2)
+            c = round(float(row['Close']), 2)
+            v = int(row['Volume']) if not np.isnan(row['Volume']) else 0
 
-            kline_data.append({"time": time_str, "open": o, "high": h, "low": l, "close": c})
-            volume_data.append({
-                "time": time_str,
-                "value": v,
-                "color": "rgba(239, 83, 80, 0.5)" if c >= o else "rgba(38, 166, 154, 0.5)"
-            })
+            kline_data.append({"time": date_str, "open": o, "high": h, "low": l, "close": c})
 
-            # 若有 MA 數值則加入，忽略開頭的 NaN
-            m5 = row['MA5'] if not isinstance(row['MA5'], pd.Series) else row['MA5'].iloc[0]
-            m20 = row['MA20'] if not isinstance(row['MA20'], pd.Series) else row['MA20'].iloc[0]
+            # 台股紅漲綠跌
+            vol_color = "rgba(239, 68, 68, 0.5)" if c >= o else "rgba(34, 197, 94, 0.5)"
+            volume_data.append({"time": date_str, "value": v, "color": vol_color})
 
-            if pd.notnull(m5):
-                ma5_data.append({"time": time_str, "value": round(float(m5), 2)})
-            if pd.notnull(m20):
-                ma20_data.append({"time": time_str, "value": round(float(m20), 2)})
+            if not np.isnan(row['MA5']):
+                ma5_data.append({"time": date_str, "value": round(float(row['MA5']), 2)})
+            if not np.isnan(row['MA20']):
+                ma20_data.append({"time": date_str, "value": round(float(row['MA20']), 2)})
 
         return {
             "symbol": symbol,
             "kline": kline_data,
             "volume": volume_data,
             "ma5": ma5_data,
-            "ma20": ma20_data
+            "ma20": ma20_data,
         }
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"K 線運算錯誤: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"K 線資料處理失敗: {str(e)}")
+
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
+    """計算即時技術面診斷、量能比、動態停損與買賣觀點"""
     try:
         ticker = get_ticker_symbol(symbol)
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-        df = clean_yfinance_dataframe(df)
+        df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
 
-        if len(df) < 20:
-            raise HTTPException(status_code=404, detail="交易日歷史資料不足")
+        if df.empty and ticker.endswith(".TW"):
+            ticker_alt = ticker.replace(".TW", ".TWO")
+            df = yf.download(ticker_alt, period="3mo", interval="1d", progress=False, auto_adjust=False)
 
-        # 確保為一維 Series
-        close_series = df['Close']
-        if isinstance(close_series, pd.DataFrame):
-            close_series = close_series.iloc[:, 0]
+        if df.empty or len(df) < 5:
+            raise HTTPException(status_code=404, detail="交易天數不足以計算指標")
 
-        vol_series = df['Volume']
-        if isinstance(vol_series, pd.DataFrame):
-            vol_series = vol_series.iloc[:, 0]
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-        ma5 = close_series.rolling(window=5).mean()
-        ma20 = close_series.rolling(window=20).mean()
-        vol_ma5 = vol_series.rolling(window=5).mean()
-        rsi_series = calculate_rsi(close_series, period=14)
+        df = df.dropna(subset=['Close'])
+        latest_row = df.iloc[-1]
+        latest_close = round(float(latest_row['Close']), 2)
 
-        close_price = round(float(close_series.iloc[-1]), 2)
-        today_rsi = round(float(rsi_series.iloc[-1]), 2) if pd.notnull(rsi_series.iloc[-1]) else 50.0
-        today_vol = float(vol_series.iloc[-1])
-        recent_vol_ma5 = float(vol_ma5.iloc[-1]) if vol_ma5.iloc[-1] > 0 else 1.0
-        vol_ratio = round(today_vol / recent_vol_ma5, 2)
+        # 計算均線
+        ma5 = float(df['Close'].tail(5).mean())
+        ma20 = float(df['Close'].tail(20).mean()) if len(df) >= 20 else ma5
 
-        is_golden_cross = (ma5.iloc[-2] <= ma20.iloc[-2]) and (ma5.iloc[-1] > ma20.iloc[-1])
-        is_death_cross = (ma5.iloc[-2] >= ma20.iloc[-2]) and (ma5.iloc[-1] < ma20.iloc[-1])
-        is_volume_up = vol_ratio >= 1.3
+        # 計算 RSI
+        rsi_val = calculate_rsi(df['Close'], period=14)
 
-        signal = "觀望 (HOLD)"
+        # 今日成交量與近 5 日均量對比 (量能比)
+        vol_today = float(latest_row['Volume'])
+        vol_avg5 = float(df['Volume'].tail(5).mean()) if len(df) >= 5 else vol_today
+        vol_ratio = round(vol_today / vol_avg5, 2) if vol_avg5 > 0 else 1.0
+
+        # 動態防守停損價 (以 MA20 支撐或近 5 日低點作為參考)
+        recent_low = float(df['Low'].tail(5).min())
+        stop_loss = round(min(ma20, recent_low * 0.99), 2)
+
+        # 量化訊號與決策分析
         reasons = []
-        stop_loss = 0.0
+        signal = "區間整理 (NEUTRAL HOLD)"
 
-        if is_golden_cross and is_volume_up:
-            signal = "強烈建議買進 (STRONG BUY)"
-            reasons.append("MA5 向上突破 MA20 (黃金交叉)")
-            reasons.append(f"成交量放大為 5 日均量之 {vol_ratio} 倍 (帶量突破)")
-            stop_loss = round(close_price * 0.96, 2)
-        elif ma5.iloc[-1] > ma20.iloc[-1]:
-            if today_rsi > 80:
-                signal = "警示：短線過熱 (OVERBOUGHT)"
-                reasons.append(f"RSI 達 {today_rsi}，進入超買區，慎防回檔")
-            else:
-                signal = "多頭持有 (BULLISH HOLD)"
-                reasons.append("股價站穩月線 (MA20) 之上，維持多方走勢")
-                stop_loss = round(float(ma20.iloc[-1]), 2)
-        elif is_death_cross or ma5.iloc[-1] < ma20.iloc[-1]:
-            signal = "建議減碼/賣出 (SELL)"
-            reasons.append("股價跌破月線或出現 MA5 死亡交叉，轉為弱勢")
+        if latest_close >= ma20:
+            reasons.append("股價站穩月線 (MA20) 之上，維持多方走勢")
+        else:
+            reasons.append("股價位於月線 (MA20) 之下，短線偏弱震盪")
+
+        if rsi_val >= 70:
+            reasons.append("RSI 處於超買熱區，防範衝高拉回")
+        elif rsi_val <= 30:
+            reasons.append("RSI 進入超賣低檔，醞釀技術性反彈")
+        else:
+            reasons.append(f"RSI 為 {rsi_val}，動能處於中性健康區間")
+
+        if vol_ratio >= 1.3:
+            reasons.append(f"量能增溫 (量能比 {vol_ratio}x)，資金交投熱絡")
+
+        # 訊號判定
+        if latest_close > ma20 and ma5 > ma20 and rsi_val > 50:
+            signal = "多頭持有 (BULLISH HOLD)"
+        elif latest_close > ma20 and vol_ratio >= 1.3:
+            signal = "帶量突破 (BUY)"
+        elif latest_close < ma20 and ma5 < ma20:
+            signal = "空頭防守 (BEARISH AVOID)"
 
         return {
             "symbol": symbol,
-            "latest_close": close_price,
-            "rsi": today_rsi,
+            "latest_close": latest_close,
+            "rsi": rsi_val,
             "volume_ratio": vol_ratio,
+            "stop_loss_price": stop_loss,
             "signal": signal,
-            "reasons": reasons,
-            "stop_loss_price": stop_loss
+            "reasons": reasons
         }
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"訊號運算錯誤: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"技術指標計算失敗: {str(e)}")
 
-@app.get("/", include_in_schema=False)
-def serve_index():
-    for path in ["static/index.html", "index.html"]:
-        if os.path.exists(path):
-            return FileResponse(path)
-    return {"message": "找不到 index.html"}
 
 @app.get("/api/stocks/{symbol}/fundamental")
 def get_fundamental(symbol: str):
     """取得股票基本面核心指標 (PE, EPS, 殖利率, 市值)"""
+    ticker = get_ticker_symbol(symbol)
+    raw_payload = {}
+
     try:
-        ticker = get_ticker_symbol(symbol)
         tk = yf.Ticker(ticker)
-        info = tk.info or {}
 
-        pe = info.get("trailingPE") or info.get("forwardPE")
-        eps = info.get("trailingEps")
-        div_yield = info.get("dividendYield")
-        mcap = info.get("marketCap")
+        # 1. 市值優先由 fast_info 取得 (海外雲端最穩定)
+        try:
+            raw_payload["market_cap"] = tk.fast_info.market_cap
+        except Exception:
+            raw_payload["market_cap"] = None
 
-        pe_str = f"{round(pe, 2)} 倍" if pe else "--"
-        eps_str = f"{round(eps, 2)} 元" if eps else "--"
-        yield_str = f"{round(div_yield * 100, 2)}%" if div_yield else "--"
+        # 2. 本益比、EPS、殖利率由 info 補充
+        try:
+            info = tk.info or {}
+            raw_payload["pe"] = info.get("trailingPE") or info.get("forwardPE")
+            raw_payload["eps"] = info.get("trailingEps")
+            raw_payload["yield_rate"] = info.get("dividendYield")
+        except Exception:
+            pass
 
-        if mcap:
-            if mcap >= 1e12:
-                mcap_str = f"{round(mcap / 1e12, 2)} 兆"
-            elif mcap >= 1e8:
-                mcap_str = f"{round(mcap / 1e8, 2)} 億"
-            else:
-                mcap_str = f"{mcap:,}"
-        else:
-            mcap_str = "--"
-
-        return {
-            "pe": pe_str,
-            "eps": eps_str,
-            "yield": yield_str,
-            "market_cap": mcap_str
-        }
     except Exception as e:
-        return {
-            "pe": "--",
-            "eps": "--",
-            "yield": "--",
-            "market_cap": "--"
-        }
+        print(f"yfinance 讀取異常: {e}")
+
+    # 使用 Pydantic v2 模型過濾與格式化
+    cleaned = FundamentalData(**raw_payload)
+    return cleaned.to_display_dict()
+
+
+# ==========================================
+# 4. 靜態檔案託管 (自動相容不同目錄結構)
+# ==========================================
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+def serve_index():
+    """首頁路由：自動尋找 static/index.html 或根目錄 index.html"""
+    if os.path.exists("static/index.html"):
+        return FileResponse("static/index.html")
+    elif os.path.exists("index.html"):
+        return FileResponse("index.html")
+    return {"message": "AI Quant Stock API 運行中，但未找到 index.html 前端檔案"}
