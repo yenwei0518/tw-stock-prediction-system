@@ -15,7 +15,7 @@
     .chart-container {
       position: relative;
       width: 100%;
-      height: 400px;
+      height: 380px;
     }
     @keyframes pulse-glow {
       0%, 100% { opacity: 1; transform: scale(1); }
@@ -35,8 +35,6 @@
 
   <!-- 左側折疊功能側邊欄 -->
   <aside id="sidebar" class="fixed md:static top-0 bottom-0 left-0 z-50 w-72 bg-zinc-950/95 border-r border-zinc-800/80 p-5 flex flex-col gap-6 transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out overflow-y-auto">
-    
-    <!-- 側欄頂部 -->
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
         <span class="text-xl">⚡</span>
@@ -100,7 +98,7 @@
       </div>
     </div>
 
-    <!-- 模組 3：量化選股雷達 -->
+    <!-- 模組 3：熱門清單 -->
     <div class="flex flex-col gap-2.5">
       <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">市場熱門清單</label>
       <div class="grid grid-cols-2 gap-2 text-xs">
@@ -122,7 +120,6 @@
         </button>
       </div>
     </div>
-
   </aside>
 
   <!-- 右側主要操作與看盤區域 -->
@@ -132,20 +129,18 @@
     <header class="flex flex-col gap-2.5">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <!-- 折疊欄開關按鈕 (桌面與手機共用) -->
           <button onclick="toggleSidebar()" class="p-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-zinc-300 transition" title="打開功能側欄">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
           </button>
           <h1 class="text-xl font-bold tracking-wider text-emerald-400">📈 QUANT STOCK</h1>
-          <div class="flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-live"></span>
+          <div class="flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full" id="statusPill">
+            <span id="liveDot" class="w-2 h-2 rounded-full bg-emerald-400 pulse-live"></span>
             <span id="refreshTimer" class="text-[10px] text-emerald-300 font-mono">10s 刷新</span>
           </div>
         </div>
         <span id="lastUpdated" class="text-[11px] text-zinc-500 font-mono">--:--:--</span>
       </div>
 
-      <!-- 搜尋列 -->
       <div class="relative">
         <div class="flex items-center bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 focus-within:border-emerald-500 transition">
           <svg class="w-5 h-5 text-zinc-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -162,11 +157,10 @@
         <ul id="searchResults" class="absolute z-50 left-0 right-0 mt-1.5 bg-zinc-900 border border-zinc-800 rounded-xl max-h-56 overflow-y-auto hidden shadow-2xl divide-y divide-zinc-800/50"></ul>
       </div>
 
-      <!-- 自選股橫向標籤列 -->
       <div class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5" id="watchlistContainer"></div>
     </header>
 
-    <!-- 當前股票資訊與即時診斷面板 -->
+    <!-- 技術面與即時診斷面板 -->
     <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3 shadow-lg">
       <div class="flex justify-between items-start">
         <div>
@@ -184,6 +178,7 @@
         </div>
       </div>
 
+      <!-- 技術指標 (3 格) -->
       <div class="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800 text-center">
         <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
           <span class="text-[11px] text-zinc-400">RSI 強弱 (14)</span>
@@ -196,6 +191,26 @@
         <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
           <span class="text-[11px] text-zinc-400">防守停損價</span>
           <p id="stopLossValue" class="text-sm font-semibold text-yellow-500 mt-0.5">--</p>
+        </div>
+      </div>
+
+      <!-- 基本面財務體質 (4 格) -->
+      <div class="grid grid-cols-4 gap-2 pt-2 border-t border-zinc-800 text-center">
+        <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
+          <span class="text-[10px] text-zinc-500">本益比 (P/E)</span>
+          <p id="peValue" class="text-xs font-semibold text-zinc-300 mt-0.5">--</p>
+        </div>
+        <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
+          <span class="text-[10px] text-zinc-500">每股盈餘 (EPS)</span>
+          <p id="epsValue" class="text-xs font-semibold text-zinc-300 mt-0.5">--</p>
+        </div>
+        <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
+          <span class="text-[10px] text-zinc-500">現金殖利率</span>
+          <p id="yieldValue" class="text-xs font-semibold text-emerald-400 mt-0.5">--</p>
+        </div>
+        <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
+          <span class="text-[10px] text-zinc-500">總市值</span>
+          <p id="mcapValue" class="text-xs font-semibold text-zinc-300 mt-0.5">--</p>
         </div>
       </div>
 
@@ -236,6 +251,23 @@
     let countdownInterval = null;
     let secondsLeft = 10;
 
+    // 1. 台股交易時段判定 (UTC+8 台灣時間)
+    function isMarketOpen() {
+      const now = new Date();
+      const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+      const twTime = new Date(utc + (3600000 * 8));
+
+      const day = twTime.getDay(); // 0 為週日, 6 為週六
+      const hour = twTime.getHours();
+      const min = twTime.getMinutes();
+      const minutes = hour * 60 + min;
+
+      const isWeekday = day >= 1 && day <= 5;
+      // 交易時間 09:00 ~ 13:35
+      const isTrading = minutes >= (9 * 60) && minutes <= (13 * 60 + 35);
+      return isWeekday && isTrading;
+    }
+
     // 自選股清單管理
     let watchlist = JSON.parse(localStorage.getItem('my_stocks') || '[]');
     if (watchlist.length === 0) {
@@ -248,12 +280,10 @@
       localStorage.setItem('my_stocks', JSON.stringify(watchlist));
     }
 
-    // 側邊欄切換
     function toggleSidebar() {
       const sidebar = document.getElementById('sidebar');
       const overlay = document.getElementById('sidebarOverlay');
       const isClosed = sidebar.classList.contains('-translate-x-full');
-
       if (isClosed) {
         sidebar.classList.remove('-translate-x-full');
         overlay.classList.remove('hidden');
@@ -263,45 +293,32 @@
       }
     }
 
-    // 圖層顯示/隱藏切換
     function handleIndicatorToggle() {
-      const showMA5 = document.getElementById('toggleMA5').checked;
-      const showMA20 = document.getElementById('toggleMA20').checked;
-      const showVol = document.getElementById('toggleVolume').checked;
-
-      ma5Series.applyOptions({ visible: showMA5 });
-      ma20Series.applyOptions({ visible: showMA20 });
-      volumeSeries.applyOptions({ visible: showVol });
+      ma5Series.applyOptions({ visible: document.getElementById('toggleMA5').checked });
+      ma20Series.applyOptions({ visible: document.getElementById('toggleMA20').checked });
+      volumeSeries.applyOptions({ visible: document.getElementById('toggleVolume').checked });
     }
 
-    // 損益與保本試算
     function calculateTradeMetrics() {
       const shares = parseInt(document.getElementById('calcShares').value) || 1000;
       const buyPrice = parseFloat(document.getElementById('calcBuyPrice').value) || currentLatestPrice;
-
       if (!buyPrice || buyPrice <= 0) return;
 
-      // 台股交易成本常數：手續費 0.1425% (買賣各一次)，證交稅 0.3% (賣出時)
       const feeRate = 0.001425;
       const taxRate = 0.003;
-
-      // 保本價格推導：賣出金額 * (1 - fee - tax) = 買進金額 * (1 + fee)
       const breakeven = (buyPrice * (1 + feeRate)) / (1 - feeRate - taxRate);
       document.getElementById('breakevenPrice').innerText = `${breakeven.toFixed(2)} TWD`;
 
-      // 若有停損價，試算總損失
       if (currentStopLoss > 0) {
         const lossPerShare = buyPrice - currentStopLoss;
         const totalLoss = Math.round(lossPerShare * shares + (buyPrice * shares * feeRate * 2) + (currentStopLoss * shares * taxRate));
         document.getElementById('estimatedRiskLoss').innerText = `-$${totalLoss.toLocaleString()} 元`;
       } else {
-        document.getElementById('estimatedRiskLoss').innerText = "未觸發停損價";
+        document.getElementById('estimatedRiskLoss').innerText = "未設停損價";
       }
-
       document.getElementById('calcResults').classList.remove('hidden');
     }
 
-    // 自選股清單
     function renderWatchlist() {
       const container = document.getElementById('watchlistContainer');
       container.innerHTML = watchlist.map(stock => {
@@ -347,7 +364,6 @@
       renderWatchlist();
     }
 
-    // 初始化 TradingView 圖表
     function initChart() {
       const container = document.getElementById('chart');
       chart = LightweightCharts.createChart(container, {
@@ -389,7 +405,22 @@
       chart.applyOptions({ width: container.clientWidth });
     }
 
-    // 抓取與更新股票資料
+    // 抓取基本面（切換股票時執行一次）
+    async function fetchFundamentalData(symbol) {
+      try {
+        const res = await fetch(`${API_BASE}/api/stocks/${symbol}/fundamental`);
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById('peValue').innerText = data.pe;
+        document.getElementById('epsValue').innerText = data.eps;
+        document.getElementById('yieldValue').innerText = data.yield;
+        document.getElementById('mcapValue').innerText = data.market_cap;
+      } catch (err) {
+        console.error("基本面讀取失敗:", err);
+      }
+    }
+
+    // 抓取走勢與即時訊號
     async function fetchStockData(symbol, isSilent = false) {
       try {
         const [resKline, resSignal] = await Promise.all([
@@ -437,13 +468,30 @@
       }
     }
 
+    // 輪詢控制 (含收盤防護)
     function startPolling(symbol) {
       if (pollInterval) clearInterval(pollInterval);
       if (countdownInterval) clearInterval(countdownInterval);
 
-      secondsLeft = 10;
       const timerEl = document.getElementById('refreshTimer');
+      const liveDot = document.getElementById('liveDot');
+      const statusPill = document.getElementById('statusPill');
+
+      if (!isMarketOpen()) {
+        timerEl.innerText = "已收盤";
+        timerEl.className = "text-[10px] text-zinc-400 font-mono";
+        liveDot.classList.remove('pulse-live', 'bg-emerald-400');
+        liveDot.classList.add('bg-zinc-500');
+        statusPill.className = "flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded-full";
+        return;
+      }
+
+      secondsLeft = 10;
       timerEl.innerText = `${secondsLeft}s 刷新`;
+      timerEl.className = "text-[10px] text-emerald-300 font-mono";
+      liveDot.classList.add('pulse-live', 'bg-emerald-400');
+      liveDot.classList.remove('bg-zinc-500');
+      statusPill.className = "flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full";
 
       countdownInterval = setInterval(() => {
         secondsLeft -= 1;
@@ -452,6 +500,10 @@
       }, 1000);
 
       pollInterval = setInterval(() => {
+        if (!isMarketOpen()) {
+          startPolling(symbol);
+          return;
+        }
         fetchStockData(symbol, true);
       }, 10000);
     }
@@ -463,15 +515,28 @@
       document.getElementById('stockName').innerText = currentName;
 
       renderWatchlist();
-      await fetchStockData(symbol, false);
+      await Promise.all([
+        fetchStockData(symbol, false),
+        fetchFundamentalData(symbol)
+      ]);
       startPolling(symbol);
 
-      // 若在手機端切換股票，自動收回側邊欄
       if (window.innerWidth < 768) {
         document.getElementById('sidebar').classList.add('-translate-x-full');
         document.getElementById('sidebarOverlay').classList.add('hidden');
       }
     }
+
+    // 分頁可見度監控：離開頁面時停止輪詢，切回時重啟
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        if (pollInterval) clearInterval(pollInterval);
+        if (countdownInterval) clearInterval(countdownInterval);
+      } else {
+        fetchStockData(currentSymbol, true);
+        startPolling(currentSymbol);
+      }
+    });
 
     // 模糊搜尋
     let debounceTimer;

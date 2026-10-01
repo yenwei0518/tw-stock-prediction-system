@@ -193,3 +193,44 @@ def serve_index():
         if os.path.exists(path):
             return FileResponse(path)
     return {"message": "找不到 index.html"}
+
+@app.get("/api/stocks/{symbol}/fundamental")
+def get_fundamental(symbol: str):
+    """取得股票基本面核心指標 (PE, EPS, 殖利率, 市值)"""
+    try:
+        ticker = get_ticker_symbol(symbol)
+        tk = yf.Ticker(ticker)
+        info = tk.info or {}
+
+        pe = info.get("trailingPE") or info.get("forwardPE")
+        eps = info.get("trailingEps")
+        div_yield = info.get("dividendYield")
+        mcap = info.get("marketCap")
+
+        pe_str = f"{round(pe, 2)} 倍" if pe else "--"
+        eps_str = f"{round(eps, 2)} 元" if eps else "--"
+        yield_str = f"{round(div_yield * 100, 2)}%" if div_yield else "--"
+
+        if mcap:
+            if mcap >= 1e12:
+                mcap_str = f"{round(mcap / 1e12, 2)} 兆"
+            elif mcap >= 1e8:
+                mcap_str = f"{round(mcap / 1e8, 2)} 億"
+            else:
+                mcap_str = f"{mcap:,}"
+        else:
+            mcap_str = "--"
+
+        return {
+            "pe": pe_str,
+            "eps": eps_str,
+            "yield": yield_str,
+            "market_cap": mcap_str
+        }
+    except Exception as e:
+        return {
+            "pe": "--",
+            "eps": "--",
+            "yield": "--",
+            "market_cap": "--"
+        }
