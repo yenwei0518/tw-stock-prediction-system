@@ -225,9 +225,7 @@
   </main>
 
   <script>
-    const API_BASE = window.location.port === "8000" 
-      ? window.location.origin 
-      : `${window.location.protocol}//${window.location.hostname}:8000`;
+    const API_BASE = window.location.origin;
 
     let currentSymbol = "2330";
     let currentName = "台積電";
