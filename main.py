@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,8 +15,8 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合全台股代碼名稱庫、TWSE 官方資料與 TradingView 看盤系統",
-    version="3.1.0"
+    description="整合全台股上市、上櫃與 ETF 全市場資料庫之量化決策系統",
+    version="3.5.0"
 )
 
 # 跨域連線配置 (CORS)
@@ -27,13 +28,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 常見上櫃 (TWO) 代碼清單，其餘預設加上 .TW
-OTC_SYMBOLS = {"6547", "3293", "8069", "5483", "6488", "3131", "3529", "8299", "6274"}
-
-# 預設備援熱門清單
+# ==========================================
+# 1. 預設熱門清單（防止冷啟動時空窗）
+# ==========================================
 DEFAULT_STOCKS = [
     {"symbol": "2330", "name": "台積電", "market": "上市"},
     {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
+    {"symbol": "006208", "name": "富邦科技台50", "market": "ETF"},
     {"symbol": "2454", "name": "聯發科", "market": "上市"},
     {"symbol": "2317", "name": "鴻海", "market": "上市"},
     {"symbol": "3481", "name": "群創", "market": "上市"},
@@ -44,63 +45,71 @@ DEFAULT_STOCKS = [
     {"symbol": "2603", "name": "長榮", "market": "上市"},
     {"symbol": "3231", "name": "緯創", "market": "上市"},
     {"symbol": "2376", "name": "技嘉", "market": "上市"},
+    {"symbol": "3293", "name": "鈊象", "market": "上櫃"},
     {"symbol": "8069", "name": "元太", "market": "上櫃"},
+    {"symbol": "6488", "name": "環球晶", "market": "上櫃"},
+    {"symbol": "3131", "name": "弘塑", "market": "上櫃"},
     {"symbol": "0056", "name": "元大高股息", "market": "ETF"},
     {"symbol": "00878", "name": "國泰永續高股息", "market": "ETF"},
     {"symbol": "00919", "name": "群益台灣精選高息", "market": "ETF"},
     {"symbol": "00929", "name": "復華台灣科技優息", "market": "ETF"},
+    {"symbol": "00940", "name": "元大台灣價值高息", "market": "ETF"},
+    {"symbol": "00679B", "name": "元大美債20年", "market": "ETF"},
 ]
 
-
-def get_ticker_symbol(symbol: str) -> str:
-    """轉換為 Yahoo Finance 代號格式"""
-    sym = symbol.strip().upper()
-    if sym.endswith(".TW") or sym.endswith(".TWO"):
-        return sym
-    if sym in OTC_SYMBOLS:
-        return f"{sym}.TWO"
-    return f"{sym}.TW"
-
-
-# ==========================================
-# 1. 全台股股票代號與名稱資料庫 + 官方快取
-# ==========================================
+# 記憶體全市場資料庫 (代號 -> 資訊)
 STOCK_DATABASE: Dict[str, dict] = {s["symbol"]: s for s in DEFAULT_STOCKS}
-TWSE_FUNDAMENTAL_CACHE: Dict[str, dict] = {}
+OTC_SYMBOLS: set = {"3293", "8069", "6488", "3131", "5483", "6547", "3529", "8299", "6274"}
+FUNDAMENTAL_CACHE: Dict[str, dict] = {}
 LAST_FETCH_TIME = 0
 CACHE_TTL = 3600 * 4  # 快取 4 小時
 
 
-def update_market_cache():
-    """向臺灣證券交易所 OpenAPI 獲取全市場代碼、名稱、本益比與殖利率"""
-    global STOCK_DATABASE, TWSE_FUNDAMENTAL_CACHE, LAST_FETCH_TIME
+# ==========================================
+# 2. 全台股全市場（上市 + 上櫃 + ETF）快取引擎
+# ==========================================
+def update_full_market_cache():
+    """整合臺灣證交所 (TWSE) 與櫃買中心 (TPEx) 官方開放資料"""
+    global STOCK_DATABASE, OTC_SYMBOLS, FUNDAMENTAL_CACHE, LAST_FETCH_TIME
     now = time.time()
-    if TWSE_FUNDAMENTAL_CACHE and (now - LAST_FETCH_TIME) < CACHE_TTL:
+    if FUNDAMENTAL_CACHE and (now - LAST_FETCH_TIME) < CACHE_TTL:
         return
 
-    url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    total_added = 0
 
+    # ----------------------------------------------------
+    # A. 抓取證交所 (TWSE) 上市全個股與全部 ETF 列表
+    # ----------------------------------------------------
     try:
-        resp = requests.get(url, headers=headers, timeout=6)
+        twse_stocks_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+        resp = requests.get(twse_stocks_url, headers=headers, timeout=6)
         if resp.status_code == 200:
-            data = resp.json()
-            new_fund_cache = {}
-            for item in data:
+            for item in resp.json():
+                code = str(item.get("Code", "")).strip()
+                name = str(item.get("Name", "")).strip()
+                if code and name:
+                    market = "ETF" if code.startswith("00") else "上市"
+                    STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
+                    total_added += 1
+    except Exception as e:
+        print(f"[TWSE 行情清單] 讀取跳過: {e}")
+
+    # ----------------------------------------------------
+    # B. 抓取證交所 (TWSE) 本益比與殖利率
+    # ----------------------------------------------------
+    try:
+        twse_pe_url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+        resp = requests.get(twse_pe_url, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            for item in resp.json():
                 code = str(item.get("Code", "")).strip()
                 name = str(item.get("Name", "")).strip()
                 if not code:
                     continue
+                if name and code not in STOCK_DATABASE:
+                    STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": "上市"}
 
-                # 1. 自動擴充全台股代碼與中文名稱搜尋庫 (解決如 3481 -> 群創 的對應問題)
-                if name:
-                    STOCK_DATABASE[code] = {
-                        "symbol": code,
-                        "name": name,
-                        "market": "上市"
-                    }
-
-                # 2. 儲存本益比與殖利率數據
                 pe_val = None
                 pe_str = str(item.get("PEratio", "")).replace(",", "").strip()
                 if pe_str and pe_str not in ("-", "--", "N/A"):
@@ -117,29 +126,90 @@ def update_market_cache():
                     except ValueError:
                         pass
 
-                new_fund_cache[code] = {
-                    "pe": pe_val,
-                    "yield_rate": yield_val
-                }
-
-            TWSE_FUNDAMENTAL_CACHE = new_fund_cache
-            LAST_FETCH_TIME = now
-            print(f"[系統快取] 已自動同步全市場股票資料庫，涵蓋 {len(STOCK_DATABASE)} 檔股票")
+                FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
     except Exception as e:
-        print(f"[系統快取] 取得失敗: {e}")
+        print(f"[TWSE 本益比] 讀取跳過: {e}")
+
+    # ----------------------------------------------------
+    # C. 抓取櫃買中心 (TPEx) 上櫃全個股與本益比/殖利率
+    # ----------------------------------------------------
+    try:
+        tpex_pe_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
+        resp = requests.get(tpex_pe_url, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            for item in resp.json():
+                code = str(item.get("SecuritiesCompanyCode") or item.get("Code", "")).strip()
+                name = str(item.get("CompanyName") or item.get("Name", "")).strip()
+                if not code:
+                    continue
+
+                if name:
+                    market = "ETF" if code.startswith("00") else "上櫃"
+                    STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
+                OTC_SYMBOLS.add(code)
+
+                pe_val = None
+                pe_str = str(item.get("PriceEarningRatio") or item.get("PEratio", "")).replace(",", "").strip()
+                if pe_str and pe_str not in ("-", "--", "N/A"):
+                    try:
+                        pe_val = float(pe_str)
+                    except ValueError:
+                        pass
+
+                yield_val = None
+                yield_str = str(item.get("DividendYield", "")).replace(",", "").replace("%", "").strip()
+                if yield_str and yield_str not in ("-", "--", "N/A"):
+                    try:
+                        yield_val = float(yield_str)
+                    except ValueError:
+                        pass
+
+                FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
+    except Exception as e:
+        print(f"[TPEx 上櫃清單] 讀取跳過: {e}")
+
+    # ----------------------------------------------------
+    # D. 抓取櫃買中心 (TPEx) 全部收盤行情（含上櫃債券 ETF）
+    # ----------------------------------------------------
+    try:
+        tpex_quotes_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+        resp = requests.get(tpex_quotes_url, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            for item in resp.json():
+                code = str(item.get("SecuritiesCompanyCode") or item.get("Code", "")).strip()
+                name = str(item.get("CompanyName") or item.get("Name", "")).strip()
+                if code and name and code not in STOCK_DATABASE:
+                    market = "ETF" if code.startswith("00") else "上櫃"
+                    STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
+                    OTC_SYMBOLS.add(code)
+    except Exception as e:
+        print(f"[TPEx 行情補完] 讀取跳過: {e}")
+
+    LAST_FETCH_TIME = now
+    print(f"[市場資料庫同步完成] 全市場共收錄 {len(STOCK_DATABASE)} 檔標的 (含上市、上櫃與全部 ETF)")
 
 
-# 伺服器啟動時在背景預熱快取
+# 背景非同步預熱：伺服器啟動時在背景執行，不影響開機秒數
 @app.on_event("startup")
 def startup_event():
-    try:
-        update_market_cache()
-    except Exception:
-        pass
+    thread = threading.Thread(target=update_full_market_cache, daemon=True)
+    thread.start()
+
+
+def get_ticker_symbol(symbol: str) -> str:
+    """自動判定市場：上櫃自動加 .TWO，上市與 ETF 加 .TW"""
+    sym = symbol.strip().upper()
+    if sym.endswith(".TW") or sym.endswith(".TWO"):
+        return sym
+    clean = sym.split(".")[0]
+    stock_info = STOCK_DATABASE.get(clean)
+    if (stock_info and stock_info.get("market") == "上櫃") or clean in OTC_SYMBOLS:
+        return f"{clean}.TWO"
+    return f"{clean}.TW"
 
 
 # ==========================================
-# 2. Pydantic v2 基本面資料清洗模型
+# 3. Pydantic v2 基本面資料清洗模型
 # ==========================================
 class FundamentalData(BaseModel):
     pe: Optional[float] = None
@@ -187,7 +257,7 @@ class FundamentalData(BaseModel):
 
 
 # ==========================================
-# 3. 技術面指標計算輔助函式
+# 4. 技術面指標計算輔助函式
 # ==========================================
 def calculate_rsi(series: pd.Series, period: int = 14) -> float:
     if len(series) < period + 1:
@@ -204,7 +274,7 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
 
 
 # ==========================================
-# 4. PWA 專屬路由
+# 5. PWA 專屬路由
 # ==========================================
 @app.get("/manifest.json")
 def get_manifest():
@@ -223,14 +293,15 @@ def get_service_worker():
 
 
 # ==========================================
-# 5. 前端核心 API 端點
+# 6. 前端核心 API 端點
 # ==========================================
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
-    """支援全台股代號與中文名稱模糊搜尋"""
-    update_market_cache()
-    query = q.strip().lower()
+    """支援全台股上市、上櫃與全部 ETF 之模糊搜尋"""
+    if len(STOCK_DATABASE) <= len(DEFAULT_STOCKS):
+        update_full_market_cache()
 
+    query = q.strip().lower()
     exact_matches = []
     prefix_matches = []
     fuzzy_matches = []
@@ -248,7 +319,7 @@ def search_stocks(q: str = Query(..., min_length=1)):
 
     results = exact_matches + prefix_matches + fuzzy_matches
 
-    # 若為未登錄的 4 碼自訂代號，才使用通稱兜底
+    # 若為未登錄的自訂 4 碼以上代號，提供通用回退
     if query.isdigit() and len(query) >= 4 and not any(r["symbol"] == query for r in results):
         results.insert(0, {"symbol": query, "name": f"台股 {query}", "market": "台股"})
 
@@ -257,13 +328,15 @@ def search_stocks(q: str = Query(..., min_length=1)):
 
 @app.get("/api/stocks/{symbol}/kline")
 def get_kline(symbol: str):
+    """取得日線 K 棒與成交量，支援 .TW 與 .TWO 雙向容錯重試"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
 
-        if df.empty and ticker.endswith(".TW"):
-            ticker_alt = ticker.replace(".TW", ".TWO")
-            df = yf.download(ticker_alt, period="6mo", interval="1d", progress=False, auto_adjust=False)
+        # 雙向容錯重試：若查無資料，自動切換至另一個市場 (.TW <-> .TWO)
+        if df.empty:
+            alt_ticker = ticker.replace(".TW", ".TWO") if ticker.endswith(".TW") else ticker.replace(".TWO", ".TW")
+            df = yf.download(alt_ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
 
         if df.empty:
             raise HTTPException(status_code=404, detail=f"查無 {symbol} 走勢資料")
@@ -310,13 +383,14 @@ def get_kline(symbol: str):
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
+    """計算即時技術指標、量能比與動態防守停損價"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
 
-        if df.empty and ticker.endswith(".TW"):
-            ticker_alt = ticker.replace(".TW", ".TWO")
-            df = yf.download(ticker_alt, period="3mo", interval="1d", progress=False, auto_adjust=False)
+        if df.empty:
+            alt_ticker = ticker.replace(".TW", ".TWO") if ticker.endswith(".TW") else ticker.replace(".TWO", ".TW")
+            df = yf.download(alt_ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
 
         if df.empty or len(df) < 5:
             raise HTTPException(status_code=404, detail="資料天數不足以計算指標")
@@ -379,6 +453,7 @@ def get_signal(symbol: str):
 
 @app.get("/api/stocks/{symbol}/fundamental")
 def get_fundamental(symbol: str):
+    """基本面取得端點：整合全市場官方快取（上市 + 上櫃）與 EPS 反推"""
     clean_code = symbol.split('.')[0].strip()
     ticker = get_ticker_symbol(symbol)
     
@@ -390,7 +465,7 @@ def get_fundamental(symbol: str):
     }
     latest_price = None
 
-    # 1. 市值與價格由 fast_info 取得 (穩定且不被限流)
+    # 1. 市值與股價從 fast_info 取得 (海外伺服器不被擋)
     try:
         tk = yf.Ticker(ticker)
         try:
@@ -399,7 +474,6 @@ def get_fundamental(symbol: str):
         except Exception:
             pass
 
-        # 嘗試從 info 補充
         try:
             info = tk.info or {}
             raw_payload["pe"] = info.get("trailingPE") or info.get("forwardPE")
@@ -412,16 +486,15 @@ def get_fundamental(symbol: str):
     except Exception as e:
         print(f"yfinance 基本面異常: {e}")
 
-    # 2. 若 Yahoo 缺乏本益比或殖利率，自動由證交所官方快取補齊
-    update_market_cache()
-    twse_info = TWSE_FUNDAMENTAL_CACHE.get(clean_code)
-    if twse_info:
-        if raw_payload["pe"] is None and twse_info.get("pe"):
-            raw_payload["pe"] = twse_info["pe"]
-        if raw_payload["yield_rate"] is None and twse_info.get("yield_rate"):
-            raw_payload["yield_rate"] = twse_info["yield_rate"]
+    # 2. 官方快取補齊（上市與上櫃皆在此快取池內）
+    market_info = FUNDAMENTAL_CACHE.get(clean_code)
+    if market_info:
+        if raw_payload["pe"] is None and market_info.get("pe"):
+            raw_payload["pe"] = market_info["pe"]
+        if raw_payload["yield_rate"] is None and market_info.get("yield_rate"):
+            raw_payload["yield_rate"] = market_info["yield_rate"]
 
-    # 3. 若 EPS 缺失，依公式以最新股價動態推算: EPS = 股價 / PE
+    # 3. 若為一般個股且 EPS 缺失，依公式動態推算: EPS = 股價 / PE
     if raw_payload["eps"] is None and raw_payload["pe"] and raw_payload["pe"] > 0:
         if latest_price and latest_price > 0:
             raw_payload["eps"] = round(latest_price / raw_payload["pe"], 2)
@@ -431,7 +504,7 @@ def get_fundamental(symbol: str):
 
 
 # ==========================================
-# 6. 前端靜態檔案託管與首頁路由
+# 7. 前端靜態檔案託管與首頁路由
 # ==========================================
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -446,7 +519,7 @@ def serve_index():
 
 
 # ==========================================
-# 7. 自動適配本機開發與 Render 雲端環境
+# 8. 自動適配本機開發與 Render 雲端環境
 # ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
