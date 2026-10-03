@@ -14,11 +14,11 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合 TradingView、PWA 原生體驗、TWSE 證交所官方開放資料與即時量化指標",
-    version="3.0.0"
+    description="整合全台股代碼名稱庫、TWSE 官方資料與 TradingView 看盤系統",
+    version="3.1.0"
 )
 
-# 允許跨域請求 (CORS)
+# 跨域連線配置 (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,15 +27,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 上櫃 (TWO) 代碼辨識清單，其餘預設加上 .TW
+# 常見上櫃 (TWO) 代碼清單，其餘預設加上 .TW
 OTC_SYMBOLS = {"6547", "3293", "8069", "5483", "6488", "3131", "3529", "8299", "6274"}
 
-# 預設熱門搜尋標的清單
-POPULAR_STOCKS = [
+# 預設備援熱門清單
+DEFAULT_STOCKS = [
     {"symbol": "2330", "name": "台積電", "market": "上市"},
     {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
     {"symbol": "2454", "name": "聯發科", "market": "上市"},
     {"symbol": "2317", "name": "鴻海", "market": "上市"},
+    {"symbol": "3481", "name": "群創", "market": "上市"},
     {"symbol": "2382", "name": "廣達", "market": "上市"},
     {"symbol": "2308", "name": "台達電", "market": "上市"},
     {"symbol": "2881", "name": "富邦金", "market": "上市"},
@@ -43,6 +44,7 @@ POPULAR_STOCKS = [
     {"symbol": "2603", "name": "長榮", "market": "上市"},
     {"symbol": "3231", "name": "緯創", "market": "上市"},
     {"symbol": "2376", "name": "技嘉", "market": "上市"},
+    {"symbol": "8069", "name": "元太", "market": "上櫃"},
     {"symbol": "0056", "name": "元大高股息", "market": "ETF"},
     {"symbol": "00878", "name": "國泰永續高股息", "market": "ETF"},
     {"symbol": "00919", "name": "群益台灣精選高息", "market": "ETF"},
@@ -51,7 +53,7 @@ POPULAR_STOCKS = [
 
 
 def get_ticker_symbol(symbol: str) -> str:
-    """轉換台股代號為 yfinance 相容之格式"""
+    """轉換為 Yahoo Finance 代號格式"""
     sym = symbol.strip().upper()
     if sym.endswith(".TW") or sym.endswith(".TWO"):
         return sym
@@ -61,34 +63,44 @@ def get_ticker_symbol(symbol: str) -> str:
 
 
 # ==========================================
-# 1. 臺灣證券交易所 (TWSE) 官方 OpenAPI 備援快取
+# 1. 全台股股票代號與名稱資料庫 + 官方快取
 # ==========================================
-TWSE_CACHE: Dict[str, dict] = {}
-LAST_TWSE_FETCH = 0
-TWSE_CACHE_TTL = 3600 * 4  # 快取 4 小時 (證交所每日盤後更新一次)
+STOCK_DATABASE: Dict[str, dict] = {s["symbol"]: s for s in DEFAULT_STOCKS}
+TWSE_FUNDAMENTAL_CACHE: Dict[str, dict] = {}
+LAST_FETCH_TIME = 0
+CACHE_TTL = 3600 * 4  # 快取 4 小時
 
 
-def update_twse_cache():
-    """向臺灣證券交易所 OpenAPI 獲取全上市公司本益比與殖利率快照"""
-    global TWSE_CACHE, LAST_TWSE_FETCH
+def update_market_cache():
+    """向臺灣證券交易所 OpenAPI 獲取全市場代碼、名稱、本益比與殖利率"""
+    global STOCK_DATABASE, TWSE_FUNDAMENTAL_CACHE, LAST_FETCH_TIME
     now = time.time()
-    if TWSE_CACHE and (now - LAST_TWSE_FETCH) < TWSE_CACHE_TTL:
+    if TWSE_FUNDAMENTAL_CACHE and (now - LAST_FETCH_TIME) < CACHE_TTL:
         return
 
     url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
         resp = requests.get(url, headers=headers, timeout=6)
         if resp.status_code == 200:
             data = resp.json()
-            new_cache = {}
+            new_fund_cache = {}
             for item in data:
                 code = str(item.get("Code", "")).strip()
+                name = str(item.get("Name", "")).strip()
                 if not code:
                     continue
 
-                # 處理本益比 (PE)
+                # 1. 自動擴充全台股代碼與中文名稱搜尋庫 (解決如 3481 -> 群創 的對應問題)
+                if name:
+                    STOCK_DATABASE[code] = {
+                        "symbol": code,
+                        "name": name,
+                        "market": "上市"
+                    }
+
+                # 2. 儲存本益比與殖利率數據
                 pe_val = None
                 pe_str = str(item.get("PEratio", "")).replace(",", "").strip()
                 if pe_str and pe_str not in ("-", "--", "N/A"):
@@ -97,7 +109,6 @@ def update_twse_cache():
                     except ValueError:
                         pass
 
-                # 處理現金殖利率 (%)
                 yield_val = None
                 yield_str = str(item.get("DividendYield", "")).replace(",", "").replace("%", "").strip()
                 if yield_str and yield_str not in ("-", "--", "N/A"):
@@ -106,21 +117,25 @@ def update_twse_cache():
                     except ValueError:
                         pass
 
-                new_cache[code] = {
+                new_fund_cache[code] = {
                     "pe": pe_val,
                     "yield_rate": yield_val
                 }
 
-            TWSE_CACHE = new_cache
-            LAST_TWSE_FETCH = now
-            print(f"[TWSE OpenAPI] 成功更新證交所基本面快取，涵蓋 {len(TWSE_CACHE)} 檔個股")
+            TWSE_FUNDAMENTAL_CACHE = new_fund_cache
+            LAST_FETCH_TIME = now
+            print(f"[系統快取] 已自動同步全市場股票資料庫，涵蓋 {len(STOCK_DATABASE)} 檔股票")
     except Exception as e:
-        print(f"[TWSE OpenAPI] 抓取異常: {e}")
+        print(f"[系統快取] 取得失敗: {e}")
 
 
-def get_twse_fundamental(symbol_code: str) -> Optional[dict]:
-    update_twse_cache()
-    return TWSE_CACHE.get(symbol_code)
+# 伺服器啟動時在背景預熱快取
+@app.on_event("startup")
+def startup_event():
+    try:
+        update_market_cache()
+    except Exception:
+        pass
 
 
 # ==========================================
@@ -150,7 +165,6 @@ class FundamentalData(BaseModel):
         return None
 
     def to_display_dict(self) -> dict:
-        """轉換為前端易讀的單位與文字格式"""
         mcap_str = "--"
         if self.market_cap and self.market_cap > 0:
             if self.market_cap >= 1e12:
@@ -190,11 +204,10 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
 
 
 # ==========================================
-# 4. PWA 專屬路由 (支援根目錄註冊)
+# 4. PWA 專屬路由
 # ==========================================
 @app.get("/manifest.json")
 def get_manifest():
-    """提供 PWA 應用設定檔"""
     path = "static/manifest.json" if os.path.exists("static/manifest.json") else "manifest.json"
     if os.path.exists(path):
         return FileResponse(path, media_type="application/manifest+json")
@@ -203,7 +216,6 @@ def get_manifest():
 
 @app.get("/sw.js")
 def get_service_worker():
-    """提供 PWA Service Worker 離線快取守護程式"""
     path = "static/sw.js" if os.path.exists("static/sw.js") else "sw.js"
     if os.path.exists(path):
         return FileResponse(path, media_type="application/javascript")
@@ -215,20 +227,36 @@ def get_service_worker():
 # ==========================================
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
-    """模糊搜尋股票代號或名稱"""
+    """支援全台股代號與中文名稱模糊搜尋"""
+    update_market_cache()
     query = q.strip().lower()
-    results = [
-        item for item in POPULAR_STOCKS 
-        if query in item["symbol"].lower() or query in item["name"].lower()
-    ]
+
+    exact_matches = []
+    prefix_matches = []
+    fuzzy_matches = []
+
+    for symbol, info in STOCK_DATABASE.items():
+        sym_lower = symbol.lower()
+        name_lower = info["name"].lower()
+
+        if query == sym_lower or query == name_lower:
+            exact_matches.append(info)
+        elif sym_lower.startswith(query) or name_lower.startswith(query):
+            prefix_matches.append(info)
+        elif query in sym_lower or query in name_lower:
+            fuzzy_matches.append(info)
+
+    results = exact_matches + prefix_matches + fuzzy_matches
+
+    # 若為未登錄的 4 碼自訂代號，才使用通稱兜底
     if query.isdigit() and len(query) >= 4 and not any(r["symbol"] == query for r in results):
         results.insert(0, {"symbol": query, "name": f"台股 {query}", "market": "台股"})
-    return results[:8]
+
+    return results[:10]
 
 
 @app.get("/api/stocks/{symbol}/kline")
 def get_kline(symbol: str):
-    """取得日線 K 棒與成交量 (支援 Lightweight Charts 渲染)"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
@@ -282,7 +310,6 @@ def get_kline(symbol: str):
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
-    """計算即時診斷、RSI、量能比與動態防守停損價"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
@@ -352,7 +379,6 @@ def get_signal(symbol: str):
 
 @app.get("/api/stocks/{symbol}/fundamental")
 def get_fundamental(symbol: str):
-    """基本面核心指標：整合 fast_info、TWSE 官方備援快取與 EPS 動態反推"""
     clean_code = symbol.split('.')[0].strip()
     ticker = get_ticker_symbol(symbol)
     
@@ -364,7 +390,7 @@ def get_fundamental(symbol: str):
     }
     latest_price = None
 
-    # 1. 市值與股價走 fast_info (海外伺服器不阻擋、毫秒級回應)
+    # 1. 市值與價格由 fast_info 取得 (穩定且不被限流)
     try:
         tk = yf.Ticker(ticker)
         try:
@@ -386,14 +412,14 @@ def get_fundamental(symbol: str):
     except Exception as e:
         print(f"yfinance 基本面異常: {e}")
 
-    # 2. 若 Yahoo 缺乏本益比或殖利率，自動啟動 TWSE 官方開放 API 快取備援
-    if raw_payload["pe"] is None or raw_payload["yield_rate"] is None:
-        twse_info = get_twse_fundamental(clean_code)
-        if twse_info:
-            if raw_payload["pe"] is None and twse_info.get("pe"):
-                raw_payload["pe"] = twse_info["pe"]
-            if raw_payload["yield_rate"] is None and twse_info.get("yield_rate"):
-                raw_payload["yield_rate"] = twse_info["yield_rate"]
+    # 2. 若 Yahoo 缺乏本益比或殖利率，自動由證交所官方快取補齊
+    update_market_cache()
+    twse_info = TWSE_FUNDAMENTAL_CACHE.get(clean_code)
+    if twse_info:
+        if raw_payload["pe"] is None and twse_info.get("pe"):
+            raw_payload["pe"] = twse_info["pe"]
+        if raw_payload["yield_rate"] is None and twse_info.get("yield_rate"):
+            raw_payload["yield_rate"] = twse_info["yield_rate"]
 
     # 3. 若 EPS 缺失，依公式以最新股價動態推算: EPS = 股價 / PE
     if raw_payload["eps"] is None and raw_payload["pe"] and raw_payload["pe"] > 0:
