@@ -1,4 +1,4 @@
-const CACHE_NAME = 'quant-stock-v1';
+const CACHE_NAME = 'quant-stock-v3';
 const STATIC_ASSETS = [
   '/',
   '/static/manifest.json',
