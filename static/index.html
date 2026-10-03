@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>AI 台股量化決策終端</title>
   
-  <!-- PWA 核心設定與圖示 -->
+  <!-- PWA 設定 -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#090a0f">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -13,7 +13,6 @@
   <meta name="apple-mobile-web-app-title" content="QuantStock">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
 
-  <!-- 第三方函式庫 (Tailwind CSS 與 TradingView 輕量圖表) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 
@@ -41,7 +40,7 @@
 </head>
 <body class="min-h-screen flex flex-col md:flex-row antialiased overflow-x-hidden selection:bg-emerald-500 selection:text-white">
 
-  <!-- 手機版功能側邊欄遮罩 -->
+  <!-- 手機版側邊欄遮罩 -->
   <div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden md:hidden transition-opacity"></div>
 
   <!-- 左側控制工具側邊欄 -->
@@ -56,7 +55,7 @@
       </button>
     </div>
 
-    <!-- 模組 1：走勢圖圖層切換 -->
+    <!-- 模組 1：圖層開關 -->
     <div class="flex flex-col gap-2.5">
       <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">走勢圖圖層</label>
       <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex flex-col gap-2.5 text-xs">
@@ -125,18 +124,18 @@
           <p class="font-semibold text-white">聯發科</p>
           <span class="text-[10px] text-zinc-500">2454 旗艦晶片</span>
         </button>
-        <button onclick="loadStock('2317', '鴻海')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition">
-          <p class="font-semibold text-white">鴻海</p>
-          <span class="text-[10px] text-zinc-500">2317 AI 伺服器</span>
+        <button onclick="loadStock('3481', '群創')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition">
+          <p class="font-semibold text-white">群創</p>
+          <span class="text-[10px] text-zinc-500">3481 面板光電</span>
         </button>
       </div>
     </div>
   </aside>
 
-  <!-- 右側主要操作與走勢看盤區域 -->
+  <!-- 右側主要看盤區域 -->
   <main class="flex-1 flex flex-col p-3 sm:p-6 max-w-4xl mx-auto w-full gap-3">
     
-    <!-- 頂部功能與搜尋列 -->
+    <!-- 頂部導航 -->
     <header class="flex flex-col gap-2.5">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -154,7 +153,7 @@
         <span id="lastUpdated" class="text-[11px] text-zinc-500 font-mono">--:--:--</span>
       </div>
 
-      <!-- 股票搜尋列 (支援即時模糊下拉) -->
+      <!-- 股票搜尋列 -->
       <div class="relative">
         <div class="flex items-center bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 focus-within:border-emerald-500 transition">
           <svg class="w-5 h-5 text-zinc-400 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -163,7 +162,7 @@
           <input 
             id="searchInput" 
             type="text" 
-            placeholder="搜尋股票代號或名稱 (例: 2330, 台積電, 0050)" 
+            placeholder="搜尋股票代號或名稱 (支援全台股 2,500+ 檔，例: 3481, 群創, 006208)" 
             class="bg-transparent text-sm w-full outline-none text-white placeholder-zinc-500"
             autocomplete="off"
           >
@@ -171,12 +170,13 @@
         <ul id="searchResults" class="absolute z-50 left-0 right-0 mt-1.5 bg-zinc-900 border border-zinc-800 rounded-xl max-h-56 overflow-y-auto hidden shadow-2xl divide-y divide-zinc-800/50"></ul>
       </div>
 
-      <!-- 自選股標籤橫向滑動列 -->
       <div class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5" id="watchlistContainer"></div>
     </header>
 
-    <!-- 技術面與基本面綜合診斷面板 -->
-    <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3 shadow-lg">
+    <!-- 綜合行情診斷面板 -->
+    <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3.5 shadow-lg">
+      
+      <!-- 標題、股價與即時漲跌幅 -->
       <div class="flex justify-between items-start">
         <div>
           <div class="flex items-center gap-2">
@@ -186,31 +186,78 @@
               <span>★</span> 追蹤
             </button>
           </div>
-          <p id="latestPrice" class="text-3xl font-extrabold text-red-500 mt-1">-- <span class="text-sm text-zinc-400 font-normal">TWD</span></p>
+          <div class="flex items-baseline gap-2.5 mt-1.5">
+            <span id="latestPrice" class="text-3xl font-extrabold text-red-500 font-mono">--</span>
+            <span class="text-xs text-zinc-400">TWD</span>
+            <span id="priceChangeBadge" class="text-xs font-bold font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">
+              --
+            </span>
+          </div>
         </div>
         <div id="signalBadge" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700 text-center">
           運算中...
         </div>
       </div>
 
-      <!-- 技術指標 (3 格) -->
-      <div class="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800 text-center">
-        <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
-          <span class="text-[11px] text-zinc-400">RSI 強弱 (14)</span>
-          <p id="rsiValue" class="text-sm font-semibold text-white mt-0.5">--</p>
+      <!-- 第一層：盤面即時四價與成交張數 (5 格) -->
+      <div class="grid grid-cols-5 gap-1.5 p-2 rounded-xl bg-zinc-950/70 border border-zinc-800 text-center text-xs">
+        <div>
+          <span class="text-[10px] text-zinc-500">今日成交</span>
+          <p id="todayVolumeLots" class="font-mono font-bold text-white mt-0.5">-- 張</p>
         </div>
-        <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
-          <span class="text-[11px] text-zinc-400">今日量能比</span>
-          <p id="volRatioValue" class="text-sm font-semibold text-white mt-0.5">--</p>
+        <div>
+          <span class="text-[10px] text-zinc-500">開盤價</span>
+          <p id="openPrice" class="font-mono font-semibold text-zinc-300 mt-0.5">--</p>
         </div>
-        <div class="bg-zinc-950/60 p-2 rounded-xl border border-zinc-800/80">
-          <span class="text-[11px] text-zinc-400">防守停損價</span>
-          <p id="stopLossValue" class="text-sm font-semibold text-yellow-500 mt-0.5">--</p>
+        <div>
+          <span class="text-[10px] text-zinc-500">最高價</span>
+          <p id="highPrice" class="font-mono font-semibold text-red-400 mt-0.5">--</p>
+        </div>
+        <div>
+          <span class="text-[10px] text-zinc-500">最低價</span>
+          <p id="lowPrice" class="font-mono font-semibold text-emerald-400 mt-0.5">--</p>
+        </div>
+        <div>
+          <span class="text-[10px] text-zinc-500">昨收價</span>
+          <p id="prevClosePrice" class="font-mono font-semibold text-zinc-400 mt-0.5">--</p>
         </div>
       </div>
 
-      <!-- 基本面財務指標 (4 格) -->
-      <div class="grid grid-cols-4 gap-2 pt-2 border-t border-zinc-800 text-center">
+      <!-- 第二層：量化實戰買賣決策點位 (4 格) -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-[11px] font-semibold text-emerald-400 tracking-wider flex items-center gap-1">
+          <span>🎯</span> 量化實戰點位建議
+        </span>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+          <div class="bg-blue-950/30 border border-blue-800/50 p-2 rounded-xl">
+            <span class="text-[10px] text-blue-400">建議買入區間</span>
+            <p id="buyRangeValue" class="text-xs font-mono font-bold text-blue-300 mt-0.5">--</p>
+          </div>
+          <div class="bg-red-950/30 border border-red-800/50 p-2 rounded-xl">
+            <span class="text-[10px] text-red-400">第一目標賣出價</span>
+            <p id="targetPriceValue" class="text-xs font-mono font-bold text-red-300 mt-0.5">--</p>
+          </div>
+          <div class="bg-yellow-950/30 border border-yellow-800/50 p-2 rounded-xl">
+            <span class="text-[10px] text-yellow-400">防守停損價</span>
+            <p id="stopLossValue" class="text-xs font-mono font-bold text-yellow-300 mt-0.5">--</p>
+          </div>
+          <div class="bg-purple-950/30 border border-purple-800/50 p-2 rounded-xl">
+            <span class="text-[10px] text-purple-400">策略盈虧比</span>
+            <p id="riskRewardValue" class="text-xs font-mono font-bold text-purple-300 mt-0.5">--</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 技術指標與基本面體質面板 -->
+      <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-2 border-t border-zinc-800 text-center">
+        <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
+          <span class="text-[10px] text-zinc-500">RSI 強弱 (14)</span>
+          <p id="rsiValue" class="text-xs font-semibold text-white mt-0.5">--</p>
+        </div>
+        <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
+          <span class="text-[10px] text-zinc-500">今日量能比</span>
+          <p id="volRatioValue" class="text-xs font-semibold text-white mt-0.5">--</p>
+        </div>
         <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
           <span class="text-[10px] text-zinc-500">本益比 (P/E)</span>
           <p id="peValue" class="text-xs font-semibold text-zinc-300 mt-0.5">--</p>
@@ -229,14 +276,14 @@
         </div>
       </div>
 
-      <!-- 量化客觀觀點分析 -->
+      <!-- 量化客觀觀點 -->
       <div class="bg-zinc-950/40 p-2.5 rounded-xl text-xs text-zinc-400 border border-zinc-800/50">
         <span class="text-zinc-300 font-medium">量化觀點：</span>
         <span id="signalReason">讀取中...</span>
       </div>
     </section>
 
-    <!-- TradingView K 線走勢圖表 -->
+    <!-- TradingView K 線走勢圖 -->
     <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-3 shadow-lg">
       <div class="flex justify-between items-center mb-2 px-1">
         <div class="flex items-center gap-3 text-[11px]">
@@ -256,7 +303,6 @@
   </main>
 
   <script>
-    // 自動取得當前網域，在本地 (localhost:8000) 或 Render 雲端都能自動對應
     const API_BASE = window.location.origin;
 
     let currentSymbol = "2330";
@@ -268,13 +314,12 @@
     let countdownInterval = null;
     let secondsLeft = 10;
 
-    // 1. 判斷台股開盤時間 (台灣時間週一至週五 09:00 ~ 13:35)
     function isMarketOpen() {
       const now = new Date();
       const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
       const twTime = new Date(utc + (3600000 * 8));
 
-      const day = twTime.getDay(); // 0 是週日, 6 是週六
+      const day = twTime.getDay();
       const hour = twTime.getHours();
       const min = twTime.getMinutes();
       const minutes = hour * 60 + min;
@@ -284,14 +329,13 @@
       return isWeekday && isTrading;
     }
 
-    // 2. 自選股清單管理 (LocalStorage)
     let watchlist = JSON.parse(localStorage.getItem('my_stocks') || '[]');
     if (watchlist.length === 0) {
       watchlist = [
         { symbol: "2330", name: "台積電" },
         { symbol: "0050", name: "元大台灣50" },
         { symbol: "2454", name: "聯發科" },
-        { symbol: "2317", name: "鴻海" }
+        { symbol: "3481", name: "群創" }
       ];
       localStorage.setItem('my_stocks', JSON.stringify(watchlist));
     }
@@ -315,7 +359,6 @@
       volumeSeries.applyOptions({ visible: document.getElementById('toggleVolume').checked });
     }
 
-    // 3. 試算保本賣出價與風控停損損失
     function calculateTradeMetrics() {
       const shares = parseInt(document.getElementById('calcShares').value) || 1000;
       const buyPrice = parseFloat(document.getElementById('calcBuyPrice').value) || currentLatestPrice;
@@ -381,7 +424,6 @@
       renderWatchlist();
     }
 
-    // 4. 初始化 Lightweight Charts 圖表
     function initChart() {
       const container = document.getElementById('chart');
       chart = LightweightCharts.createChart(container, {
@@ -399,7 +441,6 @@
         timeScale: { borderColor: '#262932', timeVisible: true }
       });
 
-      // 台股慣用配色：上漲為紅 (#ef4444)，下跌為綠 (#22c55e)
       candleSeries = chart.addCandlestickSeries({
         upColor: '#ef4444',
         downColor: '#22c55e',
@@ -424,7 +465,6 @@
       chart.applyOptions({ width: container.clientWidth });
     }
 
-    // 5. 抓取基本面數據
     async function fetchFundamentalData(symbol) {
       try {
         const res = await fetch(`${API_BASE}/api/stocks/${symbol}/fundamental`);
@@ -435,11 +475,10 @@
         document.getElementById('yieldValue').innerText = data.yield;
         document.getElementById('mcapValue').innerText = data.market_cap;
       } catch (err) {
-        console.error("基本面資料讀取失敗:", err);
+        console.error("基本面讀取失敗:", err);
       }
     }
 
-    // 6. 抓取走勢與即時診斷訊號
     async function fetchStockData(symbol, isSilent = false) {
       try {
         const [resKline, resSignal] = await Promise.all([
@@ -456,6 +495,7 @@
         currentStopLoss = sig.stop_loss_price;
         document.getElementById('calcBuyPrice').value = currentLatestPrice;
 
+        // 渲染走勢圖
         candleSeries.setData(klineData.kline);
         if (klineData.ma5) ma5Series.setData(klineData.ma5);
         if (klineData.ma20) ma20Series.setData(klineData.ma20);
@@ -463,20 +503,53 @@
         
         if (!isSilent) chart.timeScale().fitContent();
 
-        document.getElementById('latestPrice').innerHTML = `${sig.latest_close} <span class="text-sm text-zinc-400 font-normal">TWD</span>`;
+        // 渲染最新股價與漲跌 Badge
+        const isUp = sig.change >= 0;
+        const changeSign = isUp ? '+' : '';
+        const badge = document.getElementById('priceChangeBadge');
+        badge.innerText = `${changeSign}${sig.change} (${changeSign}${sig.change_pct}%)`;
+        
+        const priceEl = document.getElementById('latestPrice');
+        priceEl.innerText = sig.latest_close;
+
+        if (sig.change > 0) {
+          priceEl.className = "text-3xl font-extrabold text-red-500 font-mono";
+          badge.className = "text-xs font-bold font-mono px-2 py-0.5 rounded bg-red-950/60 text-red-400 border border-red-800/50";
+        } else if (sig.change < 0) {
+          priceEl.className = "text-3xl font-extrabold text-emerald-400 font-mono";
+          badge.className = "text-xs font-bold font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/50";
+        } else {
+          priceEl.className = "text-3xl font-extrabold text-zinc-300 font-mono";
+          badge.className = "text-xs font-bold font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700";
+        }
+
+        // 渲染第一層：四價與成交張數
+        document.getElementById('todayVolumeLots').innerText = `${sig.volume_lots.toLocaleString()} 張`;
+        document.getElementById('openPrice').innerText = sig.open;
+        document.getElementById('highPrice').innerText = sig.high;
+        document.getElementById('lowPrice').innerText = sig.low;
+        document.getElementById('prevClosePrice').innerText = sig.prev_close;
+
+        // 渲染第二層：量化實戰點位
+        document.getElementById('buyRangeValue').innerText = sig.buy_range;
+        document.getElementById('targetPriceValue').innerText = `${sig.target_price} (${sig.target_roi})`;
+        document.getElementById('stopLossValue').innerText = sig.stop_loss_price;
+        document.getElementById('riskRewardValue').innerText = sig.risk_reward;
+
+        // 技術指標
         document.getElementById('rsiValue').innerText = sig.rsi;
         document.getElementById('volRatioValue').innerText = `${sig.volume_ratio}x`;
-        document.getElementById('stopLossValue').innerText = sig.stop_loss_price > 0 ? `${sig.stop_loss_price}` : '未設';
         document.getElementById('signalReason').innerText = sig.reasons.length > 0 ? sig.reasons.join('；') : '盤勢平穩，無顯著波動訊號。';
 
-        const badge = document.getElementById('signalBadge');
-        badge.innerText = sig.signal;
+        // 訊號狀態 Badge
+        const sigBadge = document.getElementById('signalBadge');
+        sigBadge.innerText = sig.signal;
         if (sig.signal.includes("買進") || sig.signal.includes("突破") || sig.signal.includes("多頭")) {
-          badge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-red-950/80 text-red-400 border border-red-700/60";
+          sigBadge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-red-950/80 text-red-400 border border-red-700/60";
         } else if (sig.signal.includes("賣出") || sig.signal.includes("防守") || sig.signal.includes("空頭")) {
-          badge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-700/60";
+          sigBadge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-700/60";
         } else {
-          badge.className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700";
+          sigBadge.className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700";
         }
 
         const now = new Date();
@@ -487,7 +560,6 @@
       }
     }
 
-    // 7. 輪詢更新機制 (含收盤防護與節能)
     function startPolling(symbol) {
       if (pollInterval) clearInterval(pollInterval);
       if (countdownInterval) clearInterval(countdownInterval);
@@ -546,7 +618,6 @@
       }
     }
 
-    // 分頁切換監聽：離開時暫停連線，返回時重新整理
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         if (pollInterval) clearInterval(pollInterval);
@@ -557,7 +628,6 @@
       }
     });
 
-    // 8. 搜尋輸入欄與模糊查詢
     let debounceTimer;
     const searchInput = document.getElementById('searchInput');
     const searchResults = document.getElementById('searchResults');
@@ -602,7 +672,6 @@
       }
     });
 
-    // 9. 註冊 PWA Service Worker
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js')
@@ -611,7 +680,6 @@
       });
     }
 
-    // 頁面載入完成後啟動
     window.onload = () => {
       initChart();
       loadStock("2330", "台積電");

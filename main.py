@@ -15,8 +15,8 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合全台股上市、上櫃與 ETF 全市場資料庫之量化決策系統",
-    version="3.5.0"
+    description="整合全台股上市櫃資料、TradingView、行情四價與具體量化買賣點位",
+    version="4.0.0"
 )
 
 # 跨域連線配置 (CORS)
@@ -28,9 +28,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==========================================
-# 1. 預設熱門清單（防止冷啟動時空窗）
-# ==========================================
 DEFAULT_STOCKS = [
     {"symbol": "2330", "name": "台積電", "market": "上市"},
     {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
@@ -57,30 +54,25 @@ DEFAULT_STOCKS = [
     {"symbol": "00679B", "name": "元大美債20年", "market": "ETF"},
 ]
 
-# 記憶體全市場資料庫 (代號 -> 資訊)
 STOCK_DATABASE: Dict[str, dict] = {s["symbol"]: s for s in DEFAULT_STOCKS}
 OTC_SYMBOLS: set = {"3293", "8069", "6488", "3131", "5483", "6547", "3529", "8299", "6274"}
 FUNDAMENTAL_CACHE: Dict[str, dict] = {}
 LAST_FETCH_TIME = 0
-CACHE_TTL = 3600 * 4  # 快取 4 小時
+CACHE_TTL = 3600 * 4
 
 
 # ==========================================
-# 2. 全台股全市場（上市 + 上櫃 + ETF）快取引擎
+# 1. 全市場快取引擎 (TWSE + TPEx)
 # ==========================================
 def update_full_market_cache():
-    """整合臺灣證交所 (TWSE) 與櫃買中心 (TPEx) 官方開放資料"""
     global STOCK_DATABASE, OTC_SYMBOLS, FUNDAMENTAL_CACHE, LAST_FETCH_TIME
     now = time.time()
     if FUNDAMENTAL_CACHE and (now - LAST_FETCH_TIME) < CACHE_TTL:
         return
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    total_added = 0
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    # ----------------------------------------------------
-    # A. 抓取證交所 (TWSE) 上市全個股與全部 ETF 列表
-    # ----------------------------------------------------
+    # A. 證交所上市股票與 ETF
     try:
         twse_stocks_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
         resp = requests.get(twse_stocks_url, headers=headers, timeout=6)
@@ -91,13 +83,10 @@ def update_full_market_cache():
                 if code and name:
                     market = "ETF" if code.startswith("00") else "上市"
                     STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
-                    total_added += 1
-    except Exception as e:
-        print(f"[TWSE 行情清單] 讀取跳過: {e}")
+    except Exception:
+        pass
 
-    # ----------------------------------------------------
-    # B. 抓取證交所 (TWSE) 本益比與殖利率
-    # ----------------------------------------------------
+    # B. 證交所本益比與殖利率
     try:
         twse_pe_url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
         resp = requests.get(twse_pe_url, headers=headers, timeout=6)
@@ -110,29 +99,17 @@ def update_full_market_cache():
                 if name and code not in STOCK_DATABASE:
                     STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": "上市"}
 
-                pe_val = None
                 pe_str = str(item.get("PEratio", "")).replace(",", "").strip()
-                if pe_str and pe_str not in ("-", "--", "N/A"):
-                    try:
-                        pe_val = float(pe_str)
-                    except ValueError:
-                        pass
-
-                yield_val = None
                 yield_str = str(item.get("DividendYield", "")).replace(",", "").replace("%", "").strip()
-                if yield_str and yield_str not in ("-", "--", "N/A"):
-                    try:
-                        yield_val = float(yield_str)
-                    except ValueError:
-                        pass
+
+                pe_val = float(pe_str) if pe_str and pe_str not in ("-", "--", "N/A") else None
+                yield_val = float(yield_str) if yield_str and yield_str not in ("-", "--", "N/A") else None
 
                 FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
-    except Exception as e:
-        print(f"[TWSE 本益比] 讀取跳過: {e}")
+    except Exception:
+        pass
 
-    # ----------------------------------------------------
-    # C. 抓取櫃買中心 (TPEx) 上櫃全個股與本益比/殖利率
-    # ----------------------------------------------------
+    # C. 櫃買中心上櫃公司
     try:
         tpex_pe_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
         resp = requests.get(tpex_pe_url, headers=headers, timeout=6)
@@ -142,62 +119,30 @@ def update_full_market_cache():
                 name = str(item.get("CompanyName") or item.get("Name", "")).strip()
                 if not code:
                     continue
-
                 if name:
                     market = "ETF" if code.startswith("00") else "上櫃"
                     STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
                 OTC_SYMBOLS.add(code)
 
-                pe_val = None
                 pe_str = str(item.get("PriceEarningRatio") or item.get("PEratio", "")).replace(",", "").strip()
-                if pe_str and pe_str not in ("-", "--", "N/A"):
-                    try:
-                        pe_val = float(pe_str)
-                    except ValueError:
-                        pass
-
-                yield_val = None
                 yield_str = str(item.get("DividendYield", "")).replace(",", "").replace("%", "").strip()
-                if yield_str and yield_str not in ("-", "--", "N/A"):
-                    try:
-                        yield_val = float(yield_str)
-                    except ValueError:
-                        pass
+
+                pe_val = float(pe_str) if pe_str and pe_str not in ("-", "--", "N/A") else None
+                yield_val = float(yield_str) if yield_str and yield_str not in ("-", "--", "N/A") else None
 
                 FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
-    except Exception as e:
-        print(f"[TPEx 上櫃清單] 讀取跳過: {e}")
-
-    # ----------------------------------------------------
-    # D. 抓取櫃買中心 (TPEx) 全部收盤行情（含上櫃債券 ETF）
-    # ----------------------------------------------------
-    try:
-        tpex_quotes_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
-        resp = requests.get(tpex_quotes_url, headers=headers, timeout=6)
-        if resp.status_code == 200:
-            for item in resp.json():
-                code = str(item.get("SecuritiesCompanyCode") or item.get("Code", "")).strip()
-                name = str(item.get("CompanyName") or item.get("Name", "")).strip()
-                if code and name and code not in STOCK_DATABASE:
-                    market = "ETF" if code.startswith("00") else "上櫃"
-                    STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
-                    OTC_SYMBOLS.add(code)
-    except Exception as e:
-        print(f"[TPEx 行情補完] 讀取跳過: {e}")
+    except Exception:
+        pass
 
     LAST_FETCH_TIME = now
-    print(f"[市場資料庫同步完成] 全市場共收錄 {len(STOCK_DATABASE)} 檔標的 (含上市、上櫃與全部 ETF)")
 
 
-# 背景非同步預熱：伺服器啟動時在背景執行，不影響開機秒數
 @app.on_event("startup")
 def startup_event():
-    thread = threading.Thread(target=update_full_market_cache, daemon=True)
-    thread.start()
+    threading.Thread(target=update_full_market_cache, daemon=True).start()
 
 
 def get_ticker_symbol(symbol: str) -> str:
-    """自動判定市場：上櫃自動加 .TWO，上市與 ETF 加 .TW"""
     sym = symbol.strip().upper()
     if sym.endswith(".TW") or sym.endswith(".TWO"):
         return sym
@@ -209,7 +154,7 @@ def get_ticker_symbol(symbol: str) -> str:
 
 
 # ==========================================
-# 3. Pydantic v2 基本面資料清洗模型
+# 2. Pydantic v2 基本面模型
 # ==========================================
 class FundamentalData(BaseModel):
     pe: Optional[float] = None
@@ -256,9 +201,6 @@ class FundamentalData(BaseModel):
         }
 
 
-# ==========================================
-# 4. 技術面指標計算輔助函式
-# ==========================================
 def calculate_rsi(series: pd.Series, period: int = 14) -> float:
     if len(series) < period + 1:
         return 50.0
@@ -274,7 +216,7 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
 
 
 # ==========================================
-# 5. PWA 專屬路由
+# 3. PWA 專屬路由
 # ==========================================
 @app.get("/manifest.json")
 def get_manifest():
@@ -293,23 +235,19 @@ def get_service_worker():
 
 
 # ==========================================
-# 6. 前端核心 API 端點
+# 4. 核心 API 端點
 # ==========================================
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
-    """支援全台股上市、上櫃與全部 ETF 之模糊搜尋"""
     if len(STOCK_DATABASE) <= len(DEFAULT_STOCKS):
         update_full_market_cache()
 
     query = q.strip().lower()
-    exact_matches = []
-    prefix_matches = []
-    fuzzy_matches = []
+    exact_matches, prefix_matches, fuzzy_matches = [], [], []
 
     for symbol, info in STOCK_DATABASE.items():
         sym_lower = symbol.lower()
         name_lower = info["name"].lower()
-
         if query == sym_lower or query == name_lower:
             exact_matches.append(info)
         elif sym_lower.startswith(query) or name_lower.startswith(query):
@@ -318,8 +256,6 @@ def search_stocks(q: str = Query(..., min_length=1)):
             fuzzy_matches.append(info)
 
     results = exact_matches + prefix_matches + fuzzy_matches
-
-    # 若為未登錄的自訂 4 碼以上代號，提供通用回退
     if query.isdigit() and len(query) >= 4 and not any(r["symbol"] == query for r in results):
         results.insert(0, {"symbol": query, "name": f"台股 {query}", "market": "台股"})
 
@@ -328,12 +264,10 @@ def search_stocks(q: str = Query(..., min_length=1)):
 
 @app.get("/api/stocks/{symbol}/kline")
 def get_kline(symbol: str):
-    """取得日線 K 棒與成交量，支援 .TW 與 .TWO 雙向容錯重試"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
 
-        # 雙向容錯重試：若查無資料，自動切換至另一個市場 (.TW <-> .TWO)
         if df.empty:
             alt_ticker = ticker.replace(".TW", ".TWO") if ticker.endswith(".TW") else ticker.replace(".TWO", ".TW")
             df = yf.download(alt_ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
@@ -348,17 +282,11 @@ def get_kline(symbol: str):
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
 
-        kline_data = []
-        volume_data = []
-        ma5_data = []
-        ma20_data = []
+        kline_data, volume_data, ma5_data, ma20_data = [], [], [], []
 
         for idx, row in df.iterrows():
             date_str = idx.strftime("%Y-%m-%d")
-            o = round(float(row['Open']), 2)
-            h = round(float(row['High']), 2)
-            l = round(float(row['Low']), 2)
-            c = round(float(row['Close']), 2)
+            o, h, l, c = round(float(row['Open']), 2), round(float(row['High']), 2), round(float(row['Low']), 2), round(float(row['Close']), 2)
             v = int(row['Volume']) if not np.isnan(row['Volume']) else 0
 
             kline_data.append({"time": date_str, "open": o, "high": h, "low": l, "close": c})
@@ -383,7 +311,7 @@ def get_kline(symbol: str):
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
-    """計算即時技術指標、量能比與動態防守停損價"""
+    """回傳第一層（行情四價+張數）與第二層（量化具體買賣點位）"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
@@ -400,36 +328,70 @@ def get_signal(symbol: str):
 
         df = df.dropna(subset=['Close'])
         latest_row = df.iloc[-1]
-        latest_close = round(float(latest_row['Close']), 2)
+        prev_row = df.iloc[-2] if len(df) > 1 else latest_row
 
+        latest_close = round(float(latest_row['Close']), 2)
+        prev_close = round(float(prev_row['Close']), 2)
+        change = round(latest_close - prev_close, 2)
+        change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
+
+        # 第一層：行情四價與成交量（換算為張）
+        open_price = round(float(latest_row['Open']), 2)
+        high_price = round(float(latest_row['High']), 2)
+        low_price = round(float(latest_row['Low']), 2)
+        volume_today_shares = int(latest_row['Volume'])
+        volume_lots = int(volume_today_shares // 1000)  # 1 張 = 1000 股
+
+        # 技術均線與 RSI
         ma5 = float(df['Close'].tail(5).mean())
         ma20 = float(df['Close'].tail(20).mean()) if len(df) >= 20 else ma5
         rsi_val = calculate_rsi(df['Close'], period=14)
 
-        vol_today = float(latest_row['Volume'])
-        vol_avg5 = float(df['Volume'].tail(5).mean()) if len(df) >= 5 else vol_today
-        vol_ratio = round(vol_today / vol_avg5, 2) if vol_avg5 > 0 else 1.0
+        vol_avg5 = float(df['Volume'].tail(5).mean()) if len(df) >= 5 else volume_today_shares
+        vol_ratio = round(volume_today_shares / vol_avg5, 2) if vol_avg5 > 0 else 1.0
 
-        recent_low = float(df['Low'].tail(5).min())
-        stop_loss = round(min(ma20, recent_low * 0.99), 2)
+        # 第二層：量化實戰具體點位運算
+        recent_low_10 = float(df['Low'].tail(10).min())
+        recent_high_20 = float(df['High'].tail(20).max())
 
+        # 1. 防守停損價 (破月線或破近 10 日前低)
+        stop_loss = round(min(ma20, recent_low_10 * 0.99), 2)
+        if stop_loss >= latest_close:
+            stop_loss = round(latest_close * 0.96, 2)
+
+        # 2. 建議買入區間 (回測支撐甜美價)
+        buy_low = round(max(stop_loss * 1.015, latest_close * 0.985), 2)
+        buy_high = round(latest_close, 2)
+        buy_range_str = f"{buy_low} ~ {buy_high}"
+
+        # 3. 第一目標停利價 (考量前高壓力與波段盈虧比)
+        risk = max(latest_close - stop_loss, latest_close * 0.02)
+        target_price = round(max(recent_high_20, latest_close + risk * 1.6), 2)
+        target_roi = round(((target_price - latest_close) / latest_close) * 100, 2)
+
+        # 4. 策略盈虧比 (Risk/Reward)
+        potential_reward = target_price - latest_close
+        potential_risk = max(latest_close - stop_loss, 0.1)
+        rr_ratio = round(potential_reward / potential_risk, 1)
+
+        # 訊號與觀點
         reasons = []
         signal = "區間整理 (NEUTRAL HOLD)"
 
         if latest_close >= ma20:
             reasons.append("股價站穩月線 (MA20) 之上，維持多方走勢")
         else:
-            reasons.append("股價位於月線 (MA20) 之下，短線偏弱震盪")
+            reasons.append("股價位於月線 (MA20) 之下，短線偏弱整理")
 
         if rsi_val >= 70:
-            reasons.append("RSI 處於超買熱區，防範衝高拉回")
+            reasons.append("RSI 超買警戒，短線不追高，宜拉回買進")
         elif rsi_val <= 30:
-            reasons.append("RSI 進入超賣低檔，醞釀技術性反彈")
+            reasons.append("RSI 進入超賣低檔，醞釀跌深反彈")
         else:
             reasons.append(f"RSI 為 {rsi_val}，動能處於中性健康區間")
 
         if vol_ratio >= 1.3:
-            reasons.append(f"量能增溫 (量能比 {vol_ratio}x)，資金交投熱絡")
+            reasons.append(f"成交量放大 (量能比 {vol_ratio}x)，交投熱絡")
 
         if latest_close > ma20 and ma5 > ma20 and rsi_val > 50:
             signal = "多頭持有 (BULLISH HOLD)"
@@ -441,9 +403,21 @@ def get_signal(symbol: str):
         return {
             "symbol": symbol,
             "latest_close": latest_close,
-            "rsi": rsi_val,
+            "prev_close": prev_close,
+            "change": change,
+            "change_pct": change_pct,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "volume_lots": volume_lots,
             "volume_ratio": vol_ratio,
+            "rsi": rsi_val,
+            # 第二層量化點位
+            "buy_range": buy_range_str,
+            "target_price": target_price,
+            "target_roi": f"+{target_roi}%" if target_roi > 0 else f"{target_roi}%",
             "stop_loss_price": stop_loss,
+            "risk_reward": f"1 : {rr_ratio}",
             "signal": signal,
             "reasons": reasons
         }
@@ -453,19 +427,12 @@ def get_signal(symbol: str):
 
 @app.get("/api/stocks/{symbol}/fundamental")
 def get_fundamental(symbol: str):
-    """基本面取得端點：整合全市場官方快取（上市 + 上櫃）與 EPS 反推"""
     clean_code = symbol.split('.')[0].strip()
     ticker = get_ticker_symbol(symbol)
     
-    raw_payload = {
-        "pe": None,
-        "eps": None,
-        "yield_rate": None,
-        "market_cap": None
-    }
+    raw_payload = {"pe": None, "eps": None, "yield_rate": None, "market_cap": None}
     latest_price = None
 
-    # 1. 市值與股價從 fast_info 取得 (海外伺服器不被擋)
     try:
         tk = yf.Ticker(ticker)
         try:
@@ -486,7 +453,6 @@ def get_fundamental(symbol: str):
     except Exception as e:
         print(f"yfinance 基本面異常: {e}")
 
-    # 2. 官方快取補齊（上市與上櫃皆在此快取池內）
     market_info = FUNDAMENTAL_CACHE.get(clean_code)
     if market_info:
         if raw_payload["pe"] is None and market_info.get("pe"):
@@ -494,7 +460,6 @@ def get_fundamental(symbol: str):
         if raw_payload["yield_rate"] is None and market_info.get("yield_rate"):
             raw_payload["yield_rate"] = market_info["yield_rate"]
 
-    # 3. 若為一般個股且 EPS 缺失，依公式動態推算: EPS = 股價 / PE
     if raw_payload["eps"] is None and raw_payload["pe"] and raw_payload["pe"] > 0:
         if latest_price and latest_price > 0:
             raw_payload["eps"] = round(latest_price / raw_payload["pe"], 2)
@@ -504,7 +469,7 @@ def get_fundamental(symbol: str):
 
 
 # ==========================================
-# 7. 前端靜態檔案託管與首頁路由
+# 5. 前端靜態檔案託管
 # ==========================================
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -518,9 +483,6 @@ def serve_index():
     return HTMLResponse("<h1>未找到 index.html 前端檔案，請確認檔案位置。</h1>")
 
 
-# ==========================================
-# 8. 自動適配本機開發與 Render 雲端環境
-# ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
