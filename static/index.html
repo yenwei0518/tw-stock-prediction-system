@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>AI 台股量化決策終端</title>
   
-  <!-- PWA 設定 -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#090a0f">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -130,7 +129,7 @@
         <span id="lastUpdated" class="text-[11px] text-zinc-500 font-mono">--:--:--</span>
       </div>
 
-      <!-- 股票搜尋列 (支援即時加入自選或直達) -->
+      <!-- 股票搜尋列 -->
       <div class="relative">
         <div class="flex items-center bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 focus-within:border-emerald-500 transition">
           <svg class="w-5 h-5 text-zinc-400 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -149,7 +148,7 @@
     </header>
 
     <!-- ============================================== -->
-    <!-- 視圖 A：首頁「自選股即時監控列表」(對應手繪左圖) -->
+    <!-- 視圖 A：首頁「自選股即時監控列表」(方案 A 強化版) -->
     <!-- ============================================== -->
     <section id="watchlistView" class="flex flex-col gap-3">
       <div class="flex justify-between items-center px-1">
@@ -159,16 +158,15 @@
 
       <!-- 滾動式自選股票清單卡片 -->
       <div id="watchlistCardList" class="flex flex-col gap-2.5 overflow-y-auto no-scrollbar">
-        <!-- JS 動態生成自選股列表項目 -->
+        <!-- 動態渲染卡片 -->
       </div>
     </section>
 
     <!-- ============================================== -->
-    <!-- 視圖 B：個股「深度量化圖表與決策詳情頁」(對應右圖) -->
+    <!-- 視圖 B：個股「深度量化圖表與決策詳情頁」 -->
     <!-- ============================================== -->
     <div id="detailView" class="hidden flex flex-col gap-3">
       
-      <!-- 返回自選列表按鈕列 -->
       <div class="flex items-center justify-between">
         <button onclick="showWatchlistView()" class="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 font-medium px-3 py-1.5 bg-emerald-950/40 border border-emerald-800/50 rounded-xl transition">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
@@ -307,8 +305,7 @@
   <script>
     const API_BASE = window.location.origin;
 
-    // 當前檢視狀態
-    let currentView = 'watchlist'; // 'watchlist' 或 'detail'
+    let currentView = 'watchlist';
     let currentSymbol = "2330";
     let currentName = "台積電";
     let currentLatestPrice = 0;
@@ -333,7 +330,6 @@
       return isWeekday && isTrading;
     }
 
-    // 1. 自選股清單管理 (預設收錄經典 4 檔)
     let watchlist = JSON.parse(localStorage.getItem('my_stocks') || '[]');
     if (watchlist.length === 0) {
       watchlist = [
@@ -345,7 +341,6 @@
       localStorage.setItem('my_stocks', JSON.stringify(watchlist));
     }
 
-    // 2. 視圖切換邏輯 (Master-Detail 切換)
     function showWatchlistView() {
       currentView = 'watchlist';
       document.getElementById('watchlistView').classList.remove('hidden');
@@ -367,7 +362,6 @@
 
       updateFavoriteButtonState();
       
-      // 確保圖表正確初始化
       if (!chart) initChart();
       setTimeout(() => {
         const container = document.getElementById('chart');
@@ -381,7 +375,7 @@
       startPolling(symbol);
     }
 
-    // 3. 渲染首頁自選股監控列表 (對應手繪稿)
+    // 渲染【方案 A】自選卡片：名稱/代號 + AI 訊號標籤 + 成交量能 + 股價漲跌
     async function loadWatchlistData() {
       const container = document.getElementById('watchlistCardList');
       const countEl = document.getElementById('watchlistCount');
@@ -396,17 +390,30 @@
         return;
       }
 
-      // 先渲染基本佔位框架
+      // 先渲染架構
       container.innerHTML = watchlist.map(stock => `
-        <div id="row-${stock.symbol}" class="flex items-center justify-between p-4 bg-zinc-900/90 border border-zinc-800/80 hover:border-zinc-700 rounded-2xl cursor-pointer transition shadow-sm" onclick="showDetailView('${stock.symbol}', '${stock.name}')">
-          <div class="flex flex-col">
-            <span class="text-base font-bold text-white">${stock.name}</span>
+        <div id="row-${stock.symbol}" class="flex items-center justify-between p-3.5 sm:p-4 bg-zinc-900/90 border border-zinc-800/80 hover:border-zinc-700 rounded-2xl cursor-pointer transition shadow-sm" onclick="showDetailView('${stock.symbol}', '${stock.name}')">
+          <!-- 左側：名稱與代碼 -->
+          <div class="flex flex-col min-w-[85px] sm:min-w-[130px]">
+            <span class="text-base font-bold text-white tracking-wide">${stock.name}</span>
             <span class="text-xs font-mono text-zinc-500">${stock.symbol}</span>
           </div>
-          <div class="flex items-center gap-4">
+
+          <!-- 中間：AI 量化決策標籤 + 今日成交量 (方案 A 核心) -->
+          <div class="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-3 flex-1 px-2">
+            <span class="quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold border border-zinc-700 bg-zinc-800 text-zinc-400">
+              分析中...
+            </span>
+            <span class="quote-vol text-[10px] sm:text-[11px] font-mono text-zinc-400">
+              --
+            </span>
+          </div>
+
+          <!-- 右側：即時價格與漲跌幅度 -->
+          <div class="flex items-center gap-2.5 sm:gap-4 min-w-[95px] sm:min-w-[130px] justify-end">
             <div class="text-right">
               <p class="text-base font-extrabold font-mono text-zinc-300 quote-price">--</p>
-              <span class="text-xs font-bold font-mono quote-change">--</span>
+              <span class="text-xs font-bold font-mono text-zinc-500 quote-change">--</span>
             </div>
             <button onclick="removeFavorite('${stock.symbol}', event)" class="p-1.5 hover:bg-zinc-800 text-zinc-600 hover:text-red-400 rounded-lg transition" title="移除追蹤">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -415,7 +422,7 @@
         </div>
       `).join('');
 
-      // 呼叫後端批次報價 API
+      // 取得後端批次行情
       try {
         const symbolsParam = watchlist.map(s => s.symbol).join(',');
         const res = await fetch(`${API_BASE}/api/stocks/batch-quotes?symbols=${symbolsParam}`);
@@ -428,9 +435,25 @@
 
           const priceEl = row.querySelector('.quote-price');
           const changeEl = row.querySelector('.quote-change');
+          const signalEl = row.querySelector('.quote-signal');
+          const volEl = row.querySelector('.quote-vol');
 
           priceEl.innerText = q.price > 0 ? q.price : '--';
+          volEl.innerText = q.volume_str;
 
+          // 1. 設置 AI 訊號膠囊樣式
+          signalEl.innerText = q.signal;
+          if (q.signal.includes("突破")) {
+            signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-red-900/90 text-red-200 border border-red-500 shadow-sm";
+          } else if (q.signal.includes("多頭") || q.signal.includes("買進")) {
+            signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-red-950/70 text-red-400 border border-red-800/60";
+          } else if (q.signal.includes("防守") || q.signal.includes("空頭")) {
+            signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-emerald-950/70 text-emerald-400 border border-emerald-800/60";
+          } else {
+            signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-zinc-800 text-zinc-300 border border-zinc-700";
+          }
+
+          // 2. 設置股價與漲跌顏色
           const isUp = q.change > 0;
           const isDown = q.change < 0;
           const sign = isUp ? '+' : '';
@@ -726,7 +749,6 @@
       }
     });
 
-    // 搜尋功能：支援直接點入分析或按「＋追蹤」
     let debounceTimer;
     const searchInput = document.getElementById('searchInput');
     const searchResults = document.getElementById('searchResults');
@@ -786,7 +808,6 @@
     }
 
     window.onload = () => {
-      // 預設進入首頁自選股監控列表 (手繪左圖)
       showWatchlistView();
     };
   </script>

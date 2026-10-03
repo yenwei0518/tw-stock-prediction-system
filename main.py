@@ -16,11 +16,10 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合雙視圖自選清單、TradingView 與量化決策終端",
-    version="4.5.0"
+    description="整合雙視圖自選清單、AI量化訊號、TradingView 與量化決策終端",
+    version="5.0.0"
 )
 
-# 跨域連線配置 (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -59,6 +58,7 @@ DEFAULT_STOCKS = [
 STOCK_DATABASE: Dict[str, dict] = {s["symbol"]: s for s in DEFAULT_STOCKS}
 OTC_SYMBOLS: set = {"3293", "8069", "6488", "3131", "5483", "6547", "3529", "8299", "6274"}
 FUNDAMENTAL_CACHE: Dict[str, dict] = {}
+BATCH_QUOTE_CACHE: Dict[str, tuple] = {}
 LAST_FETCH_TIME = 0
 CACHE_TTL = 3600 * 4
 
@@ -74,7 +74,7 @@ def update_full_market_cache():
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # 證交所上市股票與 ETF
+    # 上市
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -87,7 +87,7 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # 證交所本益比與殖利率
+    # TWSE 本益比與殖利率
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -107,7 +107,7 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # 櫃買中心上櫃公司
+    # TPEx 上櫃
     try:
         resp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -230,53 +230,99 @@ def get_service_worker():
 
 
 # ==========================================
-# 4. 核心 API 端點
+# 4. 核心 API 端點（整合量化訊號與成交量）
 # ==========================================
 def fetch_single_quote(symbol: str) -> dict:
-    """單檔股票快速行情摘要抓取"""
+    """單檔股票即時行情、量能與 AI 量化訊號分析 (具備 20s 快取)"""
     clean_sym = symbol.strip().upper().split(".")[0]
+    now = time.time()
+    if clean_sym in BATCH_QUOTE_CACHE:
+        cached_data, cached_time = BATCH_QUOTE_CACHE[clean_sym]
+        if now - cached_time < 20:
+            return cached_data
+
     stock_info = STOCK_DATABASE.get(clean_sym, {})
     name = stock_info.get("name", f"台股 {clean_sym}")
     market = stock_info.get("market", "台股")
+    ticker = get_ticker_symbol(clean_sym)
 
-    price, prev_close = None, None
+    price, change, change_pct = 0.0, 0.0, 0.0
+    volume_lots = 0
+    vol_ratio = 1.0
+    signal = "區間整理"
+
     try:
-        ticker = get_ticker_symbol(clean_sym)
-        tk = yf.Ticker(ticker)
-        price = tk.fast_info.last_price
-        prev_close = tk.fast_info.previous_close
-
-        if price is None:
-            # 交叉重試市場
+        # 下載近 1 個月資料以計算均線、RSI 與量能比
+        df = yf.download(ticker, period="1mo", interval="1d", progress=False, auto_adjust=False)
+        if df.empty:
             alt_ticker = ticker.replace(".TW", ".TWO") if ticker.endswith(".TW") else ticker.replace(".TWO", ".TW")
-            tk_alt = yf.Ticker(alt_ticker)
-            price = tk_alt.fast_info.last_price
-            prev_close = tk_alt.fast_info.previous_close
-    except Exception:
-        pass
+            df = yf.download(alt_ticker, period="1mo", interval="1d", progress=False, auto_adjust=False)
 
-    if price is not None and prev_close is not None and prev_close > 0:
-        price = round(float(price), 2)
-        prev_close = round(float(prev_close), 2)
-        change = round(price - prev_close, 2)
-        change_pct = round((change / prev_close) * 100, 2)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        if not df.empty and len(df) >= 3:
+            df = df.dropna(subset=['Close'])
+            latest = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) > 1 else latest
+
+            price = round(float(latest['Close']), 2)
+            prev_close = round(float(prev['Close']), 2)
+            change = round(price - prev_close, 2)
+            change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
+
+            vol_today = float(latest['Volume'])
+            volume_lots = int(vol_today // 1000)
+            vol_avg5 = float(df['Volume'].tail(5).mean()) if len(df) >= 5 else vol_today
+            vol_ratio = round(vol_today / vol_avg5, 2) if vol_avg5 > 0 else 1.0
+
+            ma5 = float(df['Close'].tail(5).mean())
+            ma20 = float(df['Close'].tail(20).mean()) if len(df) >= 20 else ma5
+            rsi_val = calculate_rsi(df['Close'], period=14)
+
+            # AI 量化訊號簡易判斷
+            if price > ma20 and vol_ratio >= 1.3:
+                signal = "帶量突破"
+            elif price > ma20 and ma5 > ma20 and rsi_val > 50:
+                signal = "多頭持有"
+            elif price < ma20 and ma5 < ma20:
+                signal = "空頭防守"
+            else:
+                signal = "區間整理"
+        else:
+            tk = yf.Ticker(ticker)
+            price = round(float(tk.fast_info.last_price or 0.0), 2)
+            prev_close = round(float(tk.fast_info.previous_close or 0.0), 2)
+            if price and prev_close:
+                change = round(price - prev_close, 2)
+                change_pct = round((change / prev_close) * 100, 2)
+    except Exception as e:
+        print(f"[行情例外] {clean_sym}: {e}")
+
+    # 格式化成交量為易讀文字 (如: 3.8萬張 或 8,520張)
+    if volume_lots >= 10000:
+        vol_str = f"{round(volume_lots / 10000, 1)}萬張 ({vol_ratio}x)"
+    elif volume_lots > 0:
+        vol_str = f"{volume_lots:,}張 ({vol_ratio}x)"
     else:
-        change, change_pct = 0.0, 0.0
-        price = price or 0.0
+        vol_str = "-- 張"
 
-    return {
+    result = {
         "symbol": clean_sym,
         "name": name,
         "market": market,
         "price": price,
         "change": change,
-        "change_pct": change_pct
+        "change_pct": change_pct,
+        "volume_str": vol_str,
+        "signal": signal
     }
+    BATCH_QUOTE_CACHE[clean_sym] = (result, now)
+    return result
 
 
 @app.get("/api/stocks/batch-quotes")
-def get_batch_quotes(symbols: str = Query(..., description="逗號分隔股票代號，例: 2330,3008,2317")):
-    """首頁自選股即時行情批次查詢 (多執行緒高速並行)"""
+def get_batch_quotes(symbols: str = Query(..., description="逗號分隔股票代號")):
     sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
     if not sym_list:
         return []
