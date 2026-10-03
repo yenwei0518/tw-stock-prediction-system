@@ -4,8 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>AI 台股量化決策終端</title>
+  
+  <!-- PWA 核心設定與圖示 -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#090a0f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="QuantStock">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+
+  <!-- 第三方函式庫 (Tailwind CSS 與 TradingView 輕量圖表) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+
   <style>
     body {
       background-color: #090a0f;
@@ -19,7 +30,7 @@
     }
     @keyframes pulse-glow {
       0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 0.35; transform: scale(0.9); }
     }
     .pulse-live {
       animation: pulse-glow 2s infinite ease-in-out;
@@ -28,24 +39,24 @@
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
 </head>
-<body class="min-h-screen flex flex-col md:flex-row antialiased overflow-x-hidden">
+<body class="min-h-screen flex flex-col md:flex-row antialiased overflow-x-hidden selection:bg-emerald-500 selection:text-white">
 
-  <!-- 手機端黑色半透明背景遮罩 -->
-  <div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 hidden md:hidden transition-opacity"></div>
+  <!-- 手機版功能側邊欄遮罩 -->
+  <div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden md:hidden transition-opacity"></div>
 
-  <!-- 左側折疊功能側邊欄 -->
+  <!-- 左側控制工具側邊欄 -->
   <aside id="sidebar" class="fixed md:static top-0 bottom-0 left-0 z-50 w-72 bg-zinc-950/95 border-r border-zinc-800/80 p-5 flex flex-col gap-6 transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out overflow-y-auto">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2">
         <span class="text-xl">⚡</span>
         <span class="font-bold tracking-wider text-white text-base">控制台與工具</span>
       </div>
-      <button onclick="toggleSidebar()" class="md:hidden text-zinc-400 hover:text-white p-1">
+      <button onclick="toggleSidebar()" class="md:hidden text-zinc-400 hover:text-white p-1" aria-label="關閉側邊欄">
         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
 
-    <!-- 模組 1：走勢圖指標圖層開關 -->
+    <!-- 模組 1：走勢圖圖層切換 -->
     <div class="flex flex-col gap-2.5">
       <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">走勢圖圖層</label>
       <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex flex-col gap-2.5 text-xs">
@@ -75,11 +86,11 @@
       <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">交易風控與損益試算</label>
       <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex flex-col gap-3 text-xs">
         <div>
-          <span class="text-zinc-500 text-[10px]">預計進場股數 (1張=1000股)</span>
+          <span class="text-zinc-500 text-[10px]">預計進場股數 (1張 = 1,000股)</span>
           <input id="calcShares" type="number" value="1000" step="100" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 mt-1 text-white outline-none focus:border-emerald-500 font-mono">
         </div>
         <div>
-          <span class="text-zinc-500 text-[10px]">預計買入成本 (TWD)</span>
+          <span class="text-zinc-500 text-[10px]">買進成本 (TWD)</span>
           <input id="calcBuyPrice" type="number" step="0.5" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 mt-1 text-white outline-none focus:border-emerald-500 font-mono">
         </div>
         <button onclick="calculateTradeMetrics()" class="w-full bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 py-1.5 rounded-lg font-medium transition">
@@ -100,21 +111,21 @@
 
     <!-- 模組 3：熱門清單 -->
     <div class="flex flex-col gap-2.5">
-      <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">市場熱門清單</label>
+      <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">市場熱門快選</label>
       <div class="grid grid-cols-2 gap-2 text-xs">
-        <button onclick="loadStock('2330', '台積電')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left">
+        <button onclick="loadStock('2330', '台積電')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition">
           <p class="font-semibold text-white">台積電</p>
           <span class="text-[10px] text-zinc-500">2330 晶圓代工</span>
         </button>
-        <button onclick="loadStock('0050', '元大台灣50')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left">
+        <button onclick="loadStock('0050', '元大台灣50')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition">
           <p class="font-semibold text-white">0050</p>
           <span class="text-[10px] text-zinc-500">大盤市值型</span>
         </button>
-        <button onclick="loadStock('2454', '聯發科')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left">
+        <button onclick="loadStock('2454', '聯發科')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition">
           <p class="font-semibold text-white">聯發科</p>
           <span class="text-[10px] text-zinc-500">2454 旗艦晶片</span>
         </button>
-        <button onclick="loadStock('2317', '鴻海')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left">
+        <button onclick="loadStock('2317', '鴻海')" class="p-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-lg text-left transition">
           <p class="font-semibold text-white">鴻海</p>
           <span class="text-[10px] text-zinc-500">2317 AI 伺服器</span>
         </button>
@@ -122,17 +133,19 @@
     </div>
   </aside>
 
-  <!-- 右側主要操作與看盤區域 -->
+  <!-- 右側主要操作與走勢看盤區域 -->
   <main class="flex-1 flex flex-col p-3 sm:p-6 max-w-4xl mx-auto w-full gap-3">
     
-    <!-- 頂部導航與搜尋欄 -->
+    <!-- 頂部功能與搜尋列 -->
     <header class="flex flex-col gap-2.5">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <button onclick="toggleSidebar()" class="p-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-zinc-300 transition" title="打開功能側欄">
+          <button onclick="toggleSidebar()" class="p-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-zinc-300 transition" title="打開工具側欄">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
           </button>
-          <h1 class="text-xl font-bold tracking-wider text-emerald-400">📈 QUANT STOCK</h1>
+          <h1 class="text-xl font-bold tracking-wider text-emerald-400 flex items-center gap-1.5">
+            <span>📈</span> QUANT STOCK
+          </h1>
           <div class="flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full" id="statusPill">
             <span id="liveDot" class="w-2 h-2 rounded-full bg-emerald-400 pulse-live"></span>
             <span id="refreshTimer" class="text-[10px] text-emerald-300 font-mono">10s 刷新</span>
@@ -141,9 +154,10 @@
         <span id="lastUpdated" class="text-[11px] text-zinc-500 font-mono">--:--:--</span>
       </div>
 
+      <!-- 股票搜尋列 (支援即時模糊下拉) -->
       <div class="relative">
         <div class="flex items-center bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 focus-within:border-emerald-500 transition">
-          <svg class="w-5 h-5 text-zinc-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5 text-zinc-400 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
           <input 
@@ -157,10 +171,11 @@
         <ul id="searchResults" class="absolute z-50 left-0 right-0 mt-1.5 bg-zinc-900 border border-zinc-800 rounded-xl max-h-56 overflow-y-auto hidden shadow-2xl divide-y divide-zinc-800/50"></ul>
       </div>
 
+      <!-- 自選股標籤橫向滑動列 -->
       <div class="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5" id="watchlistContainer"></div>
     </header>
 
-    <!-- 技術面與即時診斷面板 -->
+    <!-- 技術面與基本面綜合診斷面板 -->
     <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-4 flex flex-col gap-3 shadow-lg">
       <div class="flex justify-between items-start">
         <div>
@@ -194,7 +209,7 @@
         </div>
       </div>
 
-      <!-- 基本面財務體質 (4 格) -->
+      <!-- 基本面財務指標 (4 格) -->
       <div class="grid grid-cols-4 gap-2 pt-2 border-t border-zinc-800 text-center">
         <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
           <span class="text-[10px] text-zinc-500">本益比 (P/E)</span>
@@ -214,13 +229,14 @@
         </div>
       </div>
 
+      <!-- 量化客觀觀點分析 -->
       <div class="bg-zinc-950/40 p-2.5 rounded-xl text-xs text-zinc-400 border border-zinc-800/50">
         <span class="text-zinc-300 font-medium">量化觀點：</span>
         <span id="signalReason">讀取中...</span>
       </div>
     </section>
 
-    <!-- TradingView K 線圖表 -->
+    <!-- TradingView K 線走勢圖表 -->
     <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-3 shadow-lg">
       <div class="flex justify-between items-center mb-2 px-1">
         <div class="flex items-center gap-3 text-[11px]">
@@ -232,7 +248,7 @@
             <span class="w-2 h-0.5 bg-purple-400"></span> MA20
           </span>
         </div>
-        <span class="text-[10px] text-zinc-500">可滑動縮放</span>
+        <span class="text-[10px] text-zinc-500">支援滑動縮放</span>
       </div>
       <div id="chart" class="chart-container rounded-xl overflow-hidden bg-[#0d0f12]"></div>
     </section>
@@ -240,6 +256,7 @@
   </main>
 
   <script>
+    // 自動取得當前網域，在本地 (localhost:8000) 或 Render 雲端都能自動對應
     const API_BASE = window.location.origin;
 
     let currentSymbol = "2330";
@@ -251,24 +268,23 @@
     let countdownInterval = null;
     let secondsLeft = 10;
 
-    // 1. 台股交易時段判定 (UTC+8 台灣時間)
+    // 1. 判斷台股開盤時間 (台灣時間週一至週五 09:00 ~ 13:35)
     function isMarketOpen() {
       const now = new Date();
       const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
       const twTime = new Date(utc + (3600000 * 8));
 
-      const day = twTime.getDay(); // 0 為週日, 6 為週六
+      const day = twTime.getDay(); // 0 是週日, 6 是週六
       const hour = twTime.getHours();
       const min = twTime.getMinutes();
       const minutes = hour * 60 + min;
 
       const isWeekday = day >= 1 && day <= 5;
-      // 交易時間 09:00 ~ 13:35
       const isTrading = minutes >= (9 * 60) && minutes <= (13 * 60 + 35);
       return isWeekday && isTrading;
     }
 
-    // 自選股清單管理
+    // 2. 自選股清單管理 (LocalStorage)
     let watchlist = JSON.parse(localStorage.getItem('my_stocks') || '[]');
     if (watchlist.length === 0) {
       watchlist = [
@@ -299,6 +315,7 @@
       volumeSeries.applyOptions({ visible: document.getElementById('toggleVolume').checked });
     }
 
+    // 3. 試算保本賣出價與風控停損損失
     function calculateTradeMetrics() {
       const shares = parseInt(document.getElementById('calcShares').value) || 1000;
       const buyPrice = parseFloat(document.getElementById('calcBuyPrice').value) || currentLatestPrice;
@@ -364,6 +381,7 @@
       renderWatchlist();
     }
 
+    // 4. 初始化 Lightweight Charts 圖表
     function initChart() {
       const container = document.getElementById('chart');
       chart = LightweightCharts.createChart(container, {
@@ -373,14 +391,15 @@
           fontSize: 11
         },
         grid: {
-          vertLines: { color: 'rgba(42, 46, 57, 0.4)' },
-          horzLines: { color: 'rgba(42, 46, 57, 0.4)' }
+          vertLines: { color: 'rgba(42, 46, 57, 0.35)' },
+          horzLines: { color: 'rgba(42, 46, 57, 0.35)' }
         },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         rightPriceScale: { borderColor: '#262932' },
         timeScale: { borderColor: '#262932', timeVisible: true }
       });
 
+      // 台股慣用配色：上漲為紅 (#ef4444)，下跌為綠 (#22c55e)
       candleSeries = chart.addCandlestickSeries({
         upColor: '#ef4444',
         downColor: '#22c55e',
@@ -405,7 +424,7 @@
       chart.applyOptions({ width: container.clientWidth });
     }
 
-    // 抓取基本面（切換股票時執行一次）
+    // 5. 抓取基本面數據
     async function fetchFundamentalData(symbol) {
       try {
         const res = await fetch(`${API_BASE}/api/stocks/${symbol}/fundamental`);
@@ -416,11 +435,11 @@
         document.getElementById('yieldValue').innerText = data.yield;
         document.getElementById('mcapValue').innerText = data.market_cap;
       } catch (err) {
-        console.error("基本面讀取失敗:", err);
+        console.error("基本面資料讀取失敗:", err);
       }
     }
 
-    // 抓取走勢與即時訊號
+    // 6. 抓取走勢與即時診斷訊號
     async function fetchStockData(symbol, isSilent = false) {
       try {
         const [resKline, resSignal] = await Promise.all([
@@ -448,13 +467,13 @@
         document.getElementById('rsiValue').innerText = sig.rsi;
         document.getElementById('volRatioValue').innerText = `${sig.volume_ratio}x`;
         document.getElementById('stopLossValue').innerText = sig.stop_loss_price > 0 ? `${sig.stop_loss_price}` : '未設';
-        document.getElementById('signalReason').innerText = sig.reasons.length > 0 ? sig.reasons.join('；') : '盤勢平穩，無顯著訊號。';
+        document.getElementById('signalReason').innerText = sig.reasons.length > 0 ? sig.reasons.join('；') : '盤勢平穩，無顯著波動訊號。';
 
         const badge = document.getElementById('signalBadge');
         badge.innerText = sig.signal;
-        if (sig.signal.includes("買進")) {
+        if (sig.signal.includes("買進") || sig.signal.includes("突破") || sig.signal.includes("多頭")) {
           badge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-red-950/80 text-red-400 border border-red-700/60";
-        } else if (sig.signal.includes("賣出")) {
+        } else if (sig.signal.includes("賣出") || sig.signal.includes("防守") || sig.signal.includes("空頭")) {
           badge.className = "px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-700/60";
         } else {
           badge.className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700";
@@ -464,11 +483,11 @@
         document.getElementById('lastUpdated').innerText = now.toTimeString().split(' ')[0];
 
       } catch (err) {
-        console.error("更新失敗:", err);
+        console.error("更新市場走勢失敗:", err);
       }
     }
 
-    // 輪詢控制 (含收盤防護)
+    // 7. 輪詢更新機制 (含收盤防護與節能)
     function startPolling(symbol) {
       if (pollInterval) clearInterval(pollInterval);
       if (countdownInterval) clearInterval(countdownInterval);
@@ -527,7 +546,7 @@
       }
     }
 
-    // 分頁可見度監控：離開頁面時停止輪詢，切回時重啟
+    // 分頁切換監聽：離開時暫停連線，返回時重新整理
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         if (pollInterval) clearInterval(pollInterval);
@@ -538,7 +557,7 @@
       }
     });
 
-    // 模糊搜尋
+    // 8. 搜尋輸入欄與模糊查詢
     let debounceTimer;
     const searchInput = document.getElementById('searchInput');
     const searchResults = document.getElementById('searchResults');
@@ -583,6 +602,16 @@
       }
     });
 
+    // 9. 註冊 PWA Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => console.log('PWA Service Worker 已就緒:', reg.scope))
+          .catch((err) => console.error('PWA 註冊失敗:', err));
+      });
+    }
+
+    // 頁面載入完成後啟動
     window.onload = () => {
       initChart();
       loadStock("2330", "台積電");

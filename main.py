@@ -14,11 +14,11 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合 TradingView、TWSE 證交所官方開放資料與即時量化指標",
-    version="2.5.0"
+    description="整合 TradingView、PWA 原生體驗、TWSE 證交所官方開放資料與即時量化指標",
+    version="3.0.0"
 )
 
-# 允許跨域連線 (CORS)
+# 允許跨域請求 (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,10 +27,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 上櫃代碼辨識清單
+# 上櫃 (TWO) 代碼辨識清單，其餘預設加上 .TW
 OTC_SYMBOLS = {"6547", "3293", "8069", "5483", "6488", "3131", "3529", "8299", "6274"}
 
-# 預設熱門搜尋清單
+# 預設熱門搜尋標的清單
 POPULAR_STOCKS = [
     {"symbol": "2330", "name": "台積電", "market": "上市"},
     {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
@@ -51,7 +51,7 @@ POPULAR_STOCKS = [
 
 
 def get_ticker_symbol(symbol: str) -> str:
-    """轉換為 Yahoo Finance 代號格式"""
+    """轉換台股代號為 yfinance 相容之格式"""
     sym = symbol.strip().upper()
     if sym.endswith(".TW") or sym.endswith(".TWO"):
         return sym
@@ -65,18 +65,18 @@ def get_ticker_symbol(symbol: str) -> str:
 # ==========================================
 TWSE_CACHE: Dict[str, dict] = {}
 LAST_TWSE_FETCH = 0
-TWSE_CACHE_TTL = 3600 * 4  # 快取 4 小時
+TWSE_CACHE_TTL = 3600 * 4  # 快取 4 小時 (證交所每日盤後更新一次)
 
 
 def update_twse_cache():
-    """抓取全台股官方本益比與殖利率快照"""
+    """向臺灣證券交易所 OpenAPI 獲取全上市公司本益比與殖利率快照"""
     global TWSE_CACHE, LAST_TWSE_FETCH
     now = time.time()
     if TWSE_CACHE and (now - LAST_TWSE_FETCH) < TWSE_CACHE_TTL:
         return
 
     url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     try:
         resp = requests.get(url, headers=headers, timeout=6)
@@ -113,7 +113,7 @@ def update_twse_cache():
 
             TWSE_CACHE = new_cache
             LAST_TWSE_FETCH = now
-            print(f"[TWSE OpenAPI] 成功更新證交所基本面快取，共 {len(TWSE_CACHE)} 筆")
+            print(f"[TWSE OpenAPI] 成功更新證交所基本面快取，涵蓋 {len(TWSE_CACHE)} 檔個股")
     except Exception as e:
         print(f"[TWSE OpenAPI] 抓取異常: {e}")
 
@@ -124,7 +124,7 @@ def get_twse_fundamental(symbol_code: str) -> Optional[dict]:
 
 
 # ==========================================
-# 2. Pydantic v2 資料清洗模型
+# 2. Pydantic v2 基本面資料清洗模型
 # ==========================================
 class FundamentalData(BaseModel):
     pe: Optional[float] = None
@@ -150,6 +150,7 @@ class FundamentalData(BaseModel):
         return None
 
     def to_display_dict(self) -> dict:
+        """轉換為前端易讀的單位與文字格式"""
         mcap_str = "--"
         if self.market_cap and self.market_cap > 0:
             if self.market_cap >= 1e12:
@@ -172,7 +173,7 @@ class FundamentalData(BaseModel):
 
 
 # ==========================================
-# 3. 技術面指標計算
+# 3. 技術面指標計算輔助函式
 # ==========================================
 def calculate_rsi(series: pd.Series, period: int = 14) -> float:
     if len(series) < period + 1:
@@ -189,7 +190,28 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
 
 
 # ==========================================
-# 4. 前端所需的核心 API 端點
+# 4. PWA 專屬路由 (支援根目錄註冊)
+# ==========================================
+@app.get("/manifest.json")
+def get_manifest():
+    """提供 PWA 應用設定檔"""
+    path = "static/manifest.json" if os.path.exists("static/manifest.json") else "manifest.json"
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/manifest+json")
+    raise HTTPException(status_code=404, detail="manifest.json 不存在")
+
+
+@app.get("/sw.js")
+def get_service_worker():
+    """提供 PWA Service Worker 離線快取守護程式"""
+    path = "static/sw.js" if os.path.exists("static/sw.js") else "sw.js"
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="sw.js 不存在")
+
+
+# ==========================================
+# 5. 前端核心 API 端點
 # ==========================================
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
@@ -206,7 +228,7 @@ def search_stocks(q: str = Query(..., min_length=1)):
 
 @app.get("/api/stocks/{symbol}/kline")
 def get_kline(symbol: str):
-    """取得日線 K 棒與成交量 (繪製 TradingView 圖表)"""
+    """取得日線 K 棒與成交量 (支援 Lightweight Charts 渲染)"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
@@ -270,7 +292,7 @@ def get_signal(symbol: str):
             df = yf.download(ticker_alt, period="3mo", interval="1d", progress=False, auto_adjust=False)
 
         if df.empty or len(df) < 5:
-            raise HTTPException(status_code=404, detail="資料天數不足")
+            raise HTTPException(status_code=404, detail="資料天數不足以計算指標")
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -330,7 +352,7 @@ def get_signal(symbol: str):
 
 @app.get("/api/stocks/{symbol}/fundamental")
 def get_fundamental(symbol: str):
-    """基本面取得端點：整合 Yahoo 輕量 fast_info 與 TWSE 證交所官方備援"""
+    """基本面核心指標：整合 fast_info、TWSE 官方備援快取與 EPS 動態反推"""
     clean_code = symbol.split('.')[0].strip()
     ticker = get_ticker_symbol(symbol)
     
@@ -342,7 +364,7 @@ def get_fundamental(symbol: str):
     }
     latest_price = None
 
-    # 1. 市值與股價從 fast_info 取得 (穩定且不被限流)
+    # 1. 市值與股價走 fast_info (海外伺服器不阻擋、毫秒級回應)
     try:
         tk = yf.Ticker(ticker)
         try:
@@ -364,7 +386,7 @@ def get_fundamental(symbol: str):
     except Exception as e:
         print(f"yfinance 基本面異常: {e}")
 
-    # 2. 若 Yahoo 缺乏本益比或殖利率，啟動 TWSE 官方開放 API 備援
+    # 2. 若 Yahoo 缺乏本益比或殖利率，自動啟動 TWSE 官方開放 API 快取備援
     if raw_payload["pe"] is None or raw_payload["yield_rate"] is None:
         twse_info = get_twse_fundamental(clean_code)
         if twse_info:
@@ -373,7 +395,7 @@ def get_fundamental(symbol: str):
             if raw_payload["yield_rate"] is None and twse_info.get("yield_rate"):
                 raw_payload["yield_rate"] = twse_info["yield_rate"]
 
-    # 3. 若 EPS 為空但有股價與本益比，依公式自動推算: EPS = 股價 / PE
+    # 3. 若 EPS 缺失，依公式以最新股價動態推算: EPS = 股價 / PE
     if raw_payload["eps"] is None and raw_payload["pe"] and raw_payload["pe"] > 0:
         if latest_price and latest_price > 0:
             raw_payload["eps"] = round(latest_price / raw_payload["pe"], 2)
@@ -383,14 +405,13 @@ def get_fundamental(symbol: str):
 
 
 # ==========================================
-# 5. 前端網頁路由 (自動載入 index.html)
+# 6. 前端靜態檔案託管與首頁路由
 # ==========================================
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=FileResponse)
 def serve_index():
-    """首頁優先載入完整版專業看盤畫面"""
     if os.path.exists("static/index.html"):
         return FileResponse("static/index.html")
     elif os.path.exists("index.html"):
@@ -399,7 +420,7 @@ def serve_index():
 
 
 # ==========================================
-# 6. 本機與 Render 雲端自動適配啟動
+# 7. 自動適配本機開發與 Render 雲端環境
 # ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
