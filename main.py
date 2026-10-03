@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,8 +16,8 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合全台股上市櫃資料、TradingView、行情四價與具體量化買賣點位",
-    version="4.0.0"
+    description="整合雙視圖自選清單、TradingView 與量化決策終端",
+    version="4.5.0"
 )
 
 # 跨域連線配置 (CORS)
@@ -34,6 +35,7 @@ DEFAULT_STOCKS = [
     {"symbol": "006208", "name": "富邦科技台50", "market": "ETF"},
     {"symbol": "2454", "name": "聯發科", "market": "上市"},
     {"symbol": "2317", "name": "鴻海", "market": "上市"},
+    {"symbol": "3008", "name": "大立光", "market": "上市"},
     {"symbol": "3481", "name": "群創", "market": "上市"},
     {"symbol": "2382", "name": "廣達", "market": "上市"},
     {"symbol": "2308", "name": "台達電", "market": "上市"},
@@ -72,10 +74,9 @@ def update_full_market_cache():
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # A. 證交所上市股票與 ETF
+    # 證交所上市股票與 ETF
     try:
-        twse_stocks_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-        resp = requests.get(twse_stocks_url, headers=headers, timeout=6)
+        resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
             for item in resp.json():
                 code = str(item.get("Code", "")).strip()
@@ -86,10 +87,9 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # B. 證交所本益比與殖利率
+    # 證交所本益比與殖利率
     try:
-        twse_pe_url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
-        resp = requests.get(twse_pe_url, headers=headers, timeout=6)
+        resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
             for item in resp.json():
                 code = str(item.get("Code", "")).strip()
@@ -101,18 +101,15 @@ def update_full_market_cache():
 
                 pe_str = str(item.get("PEratio", "")).replace(",", "").strip()
                 yield_str = str(item.get("DividendYield", "")).replace(",", "").replace("%", "").strip()
-
                 pe_val = float(pe_str) if pe_str and pe_str not in ("-", "--", "N/A") else None
                 yield_val = float(yield_str) if yield_str and yield_str not in ("-", "--", "N/A") else None
-
                 FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
     except Exception:
         pass
 
-    # C. 櫃買中心上櫃公司
+    # 櫃買中心上櫃公司
     try:
-        tpex_pe_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
-        resp = requests.get(tpex_pe_url, headers=headers, timeout=6)
+        resp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis", headers=headers, timeout=6)
         if resp.status_code == 200:
             for item in resp.json():
                 code = str(item.get("SecuritiesCompanyCode") or item.get("Code", "")).strip()
@@ -126,10 +123,8 @@ def update_full_market_cache():
 
                 pe_str = str(item.get("PriceEarningRatio") or item.get("PEratio", "")).replace(",", "").strip()
                 yield_str = str(item.get("DividendYield", "")).replace(",", "").replace("%", "").strip()
-
                 pe_val = float(pe_str) if pe_str and pe_str not in ("-", "--", "N/A") else None
                 yield_val = float(yield_str) if yield_str and yield_str not in ("-", "--", "N/A") else None
-
                 FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
     except Exception:
         pass
@@ -154,7 +149,7 @@ def get_ticker_symbol(symbol: str) -> str:
 
 
 # ==========================================
-# 2. Pydantic v2 基本面模型
+# 2. Pydantic v2 模型與輔助計算
 # ==========================================
 class FundamentalData(BaseModel):
     pe: Optional[float] = None
@@ -237,6 +232,61 @@ def get_service_worker():
 # ==========================================
 # 4. 核心 API 端點
 # ==========================================
+def fetch_single_quote(symbol: str) -> dict:
+    """單檔股票快速行情摘要抓取"""
+    clean_sym = symbol.strip().upper().split(".")[0]
+    stock_info = STOCK_DATABASE.get(clean_sym, {})
+    name = stock_info.get("name", f"台股 {clean_sym}")
+    market = stock_info.get("market", "台股")
+
+    price, prev_close = None, None
+    try:
+        ticker = get_ticker_symbol(clean_sym)
+        tk = yf.Ticker(ticker)
+        price = tk.fast_info.last_price
+        prev_close = tk.fast_info.previous_close
+
+        if price is None:
+            # 交叉重試市場
+            alt_ticker = ticker.replace(".TW", ".TWO") if ticker.endswith(".TW") else ticker.replace(".TWO", ".TW")
+            tk_alt = yf.Ticker(alt_ticker)
+            price = tk_alt.fast_info.last_price
+            prev_close = tk_alt.fast_info.previous_close
+    except Exception:
+        pass
+
+    if price is not None and prev_close is not None and prev_close > 0:
+        price = round(float(price), 2)
+        prev_close = round(float(prev_close), 2)
+        change = round(price - prev_close, 2)
+        change_pct = round((change / prev_close) * 100, 2)
+    else:
+        change, change_pct = 0.0, 0.0
+        price = price or 0.0
+
+    return {
+        "symbol": clean_sym,
+        "name": name,
+        "market": market,
+        "price": price,
+        "change": change,
+        "change_pct": change_pct
+    }
+
+
+@app.get("/api/stocks/batch-quotes")
+def get_batch_quotes(symbols: str = Query(..., description="逗號分隔股票代號，例: 2330,3008,2317")):
+    """首頁自選股即時行情批次查詢 (多執行緒高速並行)"""
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        return []
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(fetch_single_quote, sym_list))
+
+    return results
+
+
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
     if len(STOCK_DATABASE) <= len(DEFAULT_STOCKS):
@@ -311,7 +361,6 @@ def get_kline(symbol: str):
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
-    """回傳第一層（行情四價+張數）與第二層（量化具體買賣點位）"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
@@ -335,14 +384,12 @@ def get_signal(symbol: str):
         change = round(latest_close - prev_close, 2)
         change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
 
-        # 第一層：行情四價與成交量（換算為張）
         open_price = round(float(latest_row['Open']), 2)
         high_price = round(float(latest_row['High']), 2)
         low_price = round(float(latest_row['Low']), 2)
         volume_today_shares = int(latest_row['Volume'])
-        volume_lots = int(volume_today_shares // 1000)  # 1 張 = 1000 股
+        volume_lots = int(volume_today_shares // 1000)
 
-        # 技術均線與 RSI
         ma5 = float(df['Close'].tail(5).mean())
         ma20 = float(df['Close'].tail(20).mean()) if len(df) >= 20 else ma5
         rsi_val = calculate_rsi(df['Close'], period=14)
@@ -350,31 +397,25 @@ def get_signal(symbol: str):
         vol_avg5 = float(df['Volume'].tail(5).mean()) if len(df) >= 5 else volume_today_shares
         vol_ratio = round(volume_today_shares / vol_avg5, 2) if vol_avg5 > 0 else 1.0
 
-        # 第二層：量化實戰具體點位運算
         recent_low_10 = float(df['Low'].tail(10).min())
         recent_high_20 = float(df['High'].tail(20).max())
 
-        # 1. 防守停損價 (破月線或破近 10 日前低)
         stop_loss = round(min(ma20, recent_low_10 * 0.99), 2)
         if stop_loss >= latest_close:
             stop_loss = round(latest_close * 0.96, 2)
 
-        # 2. 建議買入區間 (回測支撐甜美價)
         buy_low = round(max(stop_loss * 1.015, latest_close * 0.985), 2)
         buy_high = round(latest_close, 2)
         buy_range_str = f"{buy_low} ~ {buy_high}"
 
-        # 3. 第一目標停利價 (考量前高壓力與波段盈虧比)
         risk = max(latest_close - stop_loss, latest_close * 0.02)
         target_price = round(max(recent_high_20, latest_close + risk * 1.6), 2)
         target_roi = round(((target_price - latest_close) / latest_close) * 100, 2)
 
-        # 4. 策略盈虧比 (Risk/Reward)
         potential_reward = target_price - latest_close
         potential_risk = max(latest_close - stop_loss, 0.1)
         rr_ratio = round(potential_reward / potential_risk, 1)
 
-        # 訊號與觀點
         reasons = []
         signal = "區間整理 (NEUTRAL HOLD)"
 
@@ -412,7 +453,6 @@ def get_signal(symbol: str):
             "volume_lots": volume_lots,
             "volume_ratio": vol_ratio,
             "rsi": rsi_val,
-            # 第二層量化點位
             "buy_range": buy_range_str,
             "target_price": target_price,
             "target_roi": f"+{target_roi}%" if target_roi > 0 else f"{target_roi}%",
