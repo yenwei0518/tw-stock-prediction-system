@@ -65,11 +65,11 @@
         <span class="font-bold tracking-wider text-white text-base">控制台與工具</span>
       </div>
       <button onclick="toggleSidebar()" class="md:hidden text-zinc-400 hover:text-white p-1" aria-label="關閉側邊欄">
-        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
 
-    <!-- 模組 1：走勢圖圖層切換 (含 MA60 季線) -->
+    <!-- 模組 1：走勢圖圖層切換 (含 MA5 / MA20 / MA60) -->
     <div class="flex flex-col gap-2.5">
       <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">走勢圖圖層</label>
       <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex flex-col gap-2.5 text-xs">
@@ -100,7 +100,7 @@
       </div>
     </div>
 
-    <!-- 模組 2：損益與手續費即時試算機 -->
+    <!-- 模組 2：損益與手續費即時試算機 (含跨股防呆修正) -->
     <div class="flex flex-col gap-2.5">
       <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">交易風控與損益試算</label>
       <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex flex-col gap-3 text-xs">
@@ -298,7 +298,7 @@
           </div>
         </div>
 
-        <!-- 第四層：營運動能 · 最新單月營收與成長率 -->
+        <!-- 第四層：營運動能 · 最新單月營收與成長率 (含 ETF 專屬防呆判定) -->
         <div class="flex flex-col gap-1.5">
           <div class="flex justify-between items-center px-0.5">
             <span class="text-[11px] font-semibold text-amber-400 tracking-wider flex items-center gap-1">
@@ -326,7 +326,7 @@
           </div>
         </div>
 
-        <!-- 第五層：技術面與基本面綜合面板 (含季線乖離率 BIAS) -->
+        <!-- 第五層：技術面與基本面綜合面板 (7 欄位，含季線乖離率 BIAS) -->
         <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2 pt-2 border-t border-zinc-800 text-center">
           <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
             <span class="text-[10px] text-zinc-500">RSI 強弱 (14)</span>
@@ -418,6 +418,7 @@
       return isWeekday && isTrading;
     }
 
+    // 預設 4 檔核心追蹤標的
     let watchlist = JSON.parse(localStorage.getItem('my_stocks') || '[]');
     if (watchlist.length === 0) {
       watchlist = [
@@ -553,7 +554,7 @@
             signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-red-900/90 text-red-200 border border-red-500 shadow-sm";
           } else if (q.signal.includes("多頭") || q.signal.includes("買進")) {
             signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-red-950/70 text-red-400 border border-red-800/60";
-          } else if (q.signal.includes("防守") || q.signal.includes("空頭")) {
+          } else if (q.signal.includes("防守") || q.signal.includes("空頭") || q.signal.includes("過熱")) {
             signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-emerald-950/70 text-emerald-400 border border-emerald-800/60";
           } else {
             signalEl.className = "quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold bg-zinc-800 text-zinc-300 border border-zinc-700";
@@ -648,23 +649,38 @@
       if (volumeSeries) volumeSeries.applyOptions({ visible: document.getElementById('toggleVolume').checked });
     }
 
+    // 交易風控與保本試算機 (具備跨股停損防呆與精確費用計算)
     function calculateTradeMetrics() {
       const shares = parseInt(document.getElementById('calcShares').value) || 1000;
       const buyPrice = parseFloat(document.getElementById('calcBuyPrice').value) || currentLatestPrice;
       if (!buyPrice || buyPrice <= 0) return;
 
+      // 保本賣出價計算 (券商手續費 0.1425% + 證交稅 0.3%)
       const feeRate = 0.001425;
       const taxRate = 0.003;
       const breakeven = (buyPrice * (1 + feeRate)) / (1 - feeRate - taxRate);
       document.getElementById('breakevenPrice').innerText = `${breakeven.toFixed(2)} TWD`;
 
-      if (currentStopLoss > 0) {
-        const lossPerShare = buyPrice - currentStopLoss;
-        const totalLoss = Math.round(lossPerShare * shares + (buyPrice * shares * feeRate * 2) + (currentStopLoss * shares * taxRate));
-        document.getElementById('estimatedRiskLoss').innerText = `-$${totalLoss.toLocaleString()} 元`;
-      } else {
-        document.getElementById('estimatedRiskLoss').innerText = "未設停損價";
+      // 停損金額防呆計算
+      const riskEl = document.getElementById('estimatedRiskLoss');
+      let effectiveStopLoss = currentStopLoss;
+
+      // 若停損價無效或大於等於買進價 (例如看盤切換股票導致的暫存殘留)，自動以 4% 防守底線計算
+      if (!effectiveStopLoss || effectiveStopLoss <= 0 || effectiveStopLoss >= buyPrice) {
+        effectiveStopLoss = Number((buyPrice * 0.96).toFixed(2));
       }
+
+      const lossPerShare = Math.max(0, buyPrice - effectiveStopLoss);
+      const buyCost = buyPrice * shares;
+      const sellProceeds = effectiveStopLoss * shares;
+      const buyFee = Math.round(buyCost * feeRate);
+      const sellFee = Math.round(sellProceeds * feeRate);
+      const sellTax = Math.round(sellProceeds * taxRate);
+      
+      const totalLoss = Math.round((lossPerShare * shares) + buyFee + sellFee + sellTax);
+
+      riskEl.innerText = `-$${totalLoss.toLocaleString()} 元`;
+      riskEl.className = "font-mono text-emerald-400";
       document.getElementById('calcResults').classList.remove('hidden');
     }
 
@@ -752,7 +768,12 @@
 
         currentLatestPrice = sig.latest_close;
         currentStopLoss = sig.stop_loss_price;
-        document.getElementById('calcBuyPrice').value = currentLatestPrice;
+        
+        // 切換個股時同步更新試算機買進成本，並隱藏舊計算結果
+        const calcPriceInput = document.getElementById('calcBuyPrice');
+        if (calcPriceInput) calcPriceInput.value = currentLatestPrice;
+        const calcResEl = document.getElementById('calcResults');
+        if (calcResEl) calcResEl.classList.add('hidden');
 
         candleSeries.setData(klineData.kline);
         if (klineData.ma5) ma5Series.setData(klineData.ma5);
