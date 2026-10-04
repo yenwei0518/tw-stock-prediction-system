@@ -15,7 +15,6 @@
   <!-- 第三方函式庫 -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
-  <!-- 引入拖曳重排核心函式庫 SortableJS -->
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 
   <style>
@@ -40,13 +39,12 @@
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-    /* 長按拖曳視覺樣式 */
     .sortable-ghost {
       opacity: 0.25;
       transform: scale(0.98);
     }
     .sortable-chosen {
-      border-color: #10b981 !important; /* 綠色發光邊框 */
+      border-color: #10b981 !important;
       background-color: rgba(16, 185, 129, 0.08) !important;
       box-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.7);
       transform: scale(1.02);
@@ -165,7 +163,7 @@
     </header>
 
     <!-- ============================================== -->
-    <!-- 視圖 A：首頁「自選股即時監控列表」(支援長按拖曳排序) -->
+    <!-- 視圖 A：首頁「自選股即時監控列表」 -->
     <!-- ============================================== -->
     <section id="watchlistView" class="flex flex-col gap-3">
       <div class="flex justify-between items-center px-1">
@@ -176,7 +174,6 @@
         <span id="watchlistCount" class="text-[11px] text-zinc-500 font-mono">0 檔追蹤中</span>
       </div>
 
-      <!-- 滾動式自選股票清單卡片容器 (SortableJS 作用區域) -->
       <div id="watchlistCardList" class="flex flex-col gap-2.5 overflow-y-auto no-scrollbar">
         <!-- 動態渲染卡片 -->
       </div>
@@ -267,6 +264,34 @@
           </div>
         </div>
 
+        <!-- NEW 籌碼面：三大法人昨日買賣超 (張) -->
+        <div class="flex flex-col gap-1.5">
+          <div class="flex justify-between items-center px-0.5">
+            <span class="text-[11px] font-semibold text-amber-400 tracking-wider flex items-center gap-1">
+              <span>🏛️</span> 籌碼面 · 三大法人昨日買賣超 (張)
+            </span>
+            <span class="text-[10px] text-zinc-500">官方盤後結算</span>
+          </div>
+          <div class="grid grid-cols-4 gap-2 text-center">
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
+              <span class="text-[10px] text-zinc-400">外資買賣超</span>
+              <p id="instForeign" class="text-xs font-mono font-bold text-zinc-300 mt-0.5">--</p>
+            </div>
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl relative overflow-hidden">
+              <span class="text-[10px] text-amber-300 font-medium">投信買賣超 ⭐</span>
+              <p id="instTrust" class="text-xs font-mono font-bold text-zinc-300 mt-0.5">--</p>
+            </div>
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
+              <span class="text-[10px] text-zinc-400">自營商買賣超</span>
+              <p id="instDealer" class="text-xs font-mono font-bold text-zinc-300 mt-0.5">--</p>
+            </div>
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
+              <span class="text-[10px] text-zinc-400">三大法人合計</span>
+              <p id="instTotal" class="text-xs font-mono font-bold text-zinc-300 mt-0.5">--</p>
+            </div>
+          </div>
+        </div>
+
         <!-- 技術指標與基本面面板 -->
         <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-2 border-t border-zinc-800 text-center">
           <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
@@ -334,7 +359,7 @@
     let pollInterval = null;
     let countdownInterval = null;
     let secondsLeft = 10;
-    let sortableInstance = null; // Sortable 拖曳實例
+    let sortableInstance = null;
 
     function isMarketOpen() {
       const now = new Date();
@@ -351,13 +376,14 @@
       return isWeekday && isTrading;
     }
 
+    // 預設 4 檔核心股票
     let watchlist = JSON.parse(localStorage.getItem('my_stocks') || '[]');
     if (watchlist.length === 0) {
       watchlist = [
         { symbol: "2330", name: "台積電" },
         { symbol: "0050", name: "元大台灣50" },
         { symbol: "2454", name: "聯發科" },
-        { symbol: "2317", name: "鴻海" },
+        { symbol: "2317", name: "鴻海" }
       ];
       localStorage.setItem('my_stocks', JSON.stringify(watchlist));
     }
@@ -396,36 +422,29 @@
       startPolling(symbol);
     }
 
-    // 初始化 SortableJS 長按拖曳重排
     function initWatchlistSortable() {
       const container = document.getElementById('watchlistCardList');
-      if (sortableInstance) {
-        sortableInstance.destroy();
-      }
+      if (sortableInstance) sortableInstance.destroy();
 
       sortableInstance = new Sortable(container, {
         animation: 200,
-        delay: 350,              // 關鍵：長按 350 毫秒才啟動拖曳（避免誤觸點選跳轉）
-        delayOnTouchOnly: true,  // 手機觸控需長按；電腦滑鼠亦可直接拖曳
-        touchStartThreshold: 5,  // 滑動容錯半徑
+        delay: 350,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 5,
         ghostClass: 'sortable-ghost',
         chosenClass: 'sortable-chosen',
         onEnd: function (evt) {
-          // 取得拖曳結束後的最新順序
           const itemElements = Array.from(container.querySelectorAll('[data-symbol]'));
           const reorderedSymbols = itemElements.map(el => el.getAttribute('data-symbol'));
 
-          // 重新排序記憶體與 LocalStorage 中的 watchlist 陣列
           watchlist.sort((a, b) => {
             return reorderedSymbols.indexOf(a.symbol) - reorderedSymbols.indexOf(b.symbol);
           });
-
           localStorage.setItem('my_stocks', JSON.stringify(watchlist));
         }
       });
     }
 
-    // 渲染自選股卡片（加入 data-symbol 與長按相容）
     async function loadWatchlistData() {
       const container = document.getElementById('watchlistCardList');
       const countEl = document.getElementById('watchlistCount');
@@ -442,13 +461,11 @@
 
       container.innerHTML = watchlist.map(stock => `
         <div id="row-${stock.symbol}" data-symbol="${stock.symbol}" class="flex items-center justify-between p-3.5 sm:p-4 bg-zinc-900/90 border border-zinc-800/80 hover:border-zinc-700 rounded-2xl cursor-pointer transition shadow-sm select-none" onclick="showDetailView('${stock.symbol}', '${stock.name}')">
-          <!-- 左側：名稱與代碼 -->
           <div class="flex flex-col min-w-[85px] sm:min-w-[130px]">
             <span class="text-base font-bold text-white tracking-wide">${stock.name}</span>
             <span class="text-xs font-mono text-zinc-500">${stock.symbol}</span>
           </div>
 
-          <!-- 中間：AI 量化決策標籤 + 今日成交量 -->
           <div class="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-3 flex-1 px-2 pointer-events-none">
             <span class="quote-signal px-2 py-0.5 rounded-lg text-[10px] sm:text-[11px] font-bold border border-zinc-700 bg-zinc-800 text-zinc-400">
               分析中...
@@ -458,7 +475,6 @@
             </span>
           </div>
 
-          <!-- 右側：即時價格與漲跌幅度 -->
           <div class="flex items-center gap-2.5 sm:gap-4 min-w-[95px] sm:min-w-[130px] justify-end">
             <div class="text-right pointer-events-none">
               <p class="text-base font-extrabold font-mono text-zinc-300 quote-price">--</p>
@@ -471,10 +487,8 @@
         </div>
       `).join('');
 
-      // 初始化拖曳事件
       initWatchlistSortable();
 
-      // 取得後端批次行情
       try {
         const symbolsParam = watchlist.map(s => s.symbol).join(',');
         const res = await fetch(`${API_BASE}/api/stocks/batch-quotes?symbols=${symbolsParam}`);
@@ -667,6 +681,21 @@
       }
     }
 
+    // 格式化三大法人數值 (紅買綠賣)
+    function formatInstValue(elementId, lots) {
+      const el = document.getElementById(elementId);
+      if (lots > 0) {
+        el.innerText = `+${lots.toLocaleString()} 張`;
+        el.className = "text-xs font-mono font-bold text-red-500 mt-0.5";
+      } else if (lots < 0) {
+        el.innerText = `${lots.toLocaleString()} 張`;
+        el.className = "text-xs font-mono font-bold text-emerald-400 mt-0.5";
+      } else {
+        el.innerText = "0 張";
+        el.className = "text-xs font-mono font-bold text-zinc-500 mt-0.5";
+      }
+    }
+
     async function fetchStockData(symbol, isSilent = false) {
       try {
         const [resKline, resSignal] = await Promise.all([
@@ -719,6 +748,14 @@
         document.getElementById('targetPriceValue').innerText = `${sig.target_price} (${sig.target_roi})`;
         document.getElementById('stopLossValue').innerText = sig.stop_loss_price;
         document.getElementById('riskRewardValue').innerText = sig.risk_reward;
+
+        // 渲染三大法人籌碼數據
+        if (sig.institutional) {
+          formatInstValue('instForeign', sig.institutional.foreign);
+          formatInstValue('instTrust', sig.institutional.trust);
+          formatInstValue('instDealer', sig.institutional.dealer);
+          formatInstValue('instTotal', sig.institutional.total);
+        }
 
         document.getElementById('rsiValue').innerText = sig.rsi;
         document.getElementById('volRatioValue').innerText = `${sig.volume_ratio}x`;

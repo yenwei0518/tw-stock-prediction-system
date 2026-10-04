@@ -16,8 +16,8 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合雙視圖自選清單、AI量化訊號、TradingView 與量化決策終端",
-    version="5.0.0"
+    description="整合雙視圖自選清單、三大法人籌碼、TradingView 與量化決策終端",
+    version="5.5.0"
 )
 
 app.add_middleware(
@@ -31,50 +31,43 @@ app.add_middleware(
 DEFAULT_STOCKS = [
     {"symbol": "2330", "name": "台積電", "market": "上市"},
     {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
-    {"symbol": "006208", "name": "富邦科技台50", "market": "ETF"},
     {"symbol": "2454", "name": "聯發科", "market": "上市"},
     {"symbol": "2317", "name": "鴻海", "market": "上市"},
-    {"symbol": "3008", "name": "大立光", "market": "上市"},
-    {"symbol": "3481", "name": "群創", "market": "上市"},
-    {"symbol": "2382", "name": "廣達", "market": "上市"},
-    {"symbol": "2308", "name": "台達電", "market": "上市"},
-    {"symbol": "2881", "name": "富邦金", "market": "上市"},
-    {"symbol": "2882", "name": "國泰金", "market": "上市"},
-    {"symbol": "2603", "name": "長榮", "market": "上市"},
-    {"symbol": "3231", "name": "緯創", "market": "上市"},
-    {"symbol": "2376", "name": "技嘉", "market": "上市"},
-    {"symbol": "3293", "name": "鈊象", "market": "上櫃"},
-    {"symbol": "8069", "name": "元太", "market": "上櫃"},
-    {"symbol": "6488", "name": "環球晶", "market": "上櫃"},
-    {"symbol": "3131", "name": "弘塑", "market": "上櫃"},
-    {"symbol": "0056", "name": "元大高股息", "market": "ETF"},
-    {"symbol": "00878", "name": "國泰永續高股息", "market": "ETF"},
-    {"symbol": "00919", "name": "群益台灣精選高息", "market": "ETF"},
-    {"symbol": "00929", "name": "復華台灣科技優息", "market": "ETF"},
-    {"symbol": "00940", "name": "元大台灣價值高息", "market": "ETF"},
-    {"symbol": "00679B", "name": "元大美債20年", "market": "ETF"},
 ]
 
 STOCK_DATABASE: Dict[str, dict] = {s["symbol"]: s for s in DEFAULT_STOCKS}
 OTC_SYMBOLS: set = {"3293", "8069", "6488", "3131", "5483", "6547", "3529", "8299", "6274"}
 FUNDAMENTAL_CACHE: Dict[str, dict] = {}
+INSTITUTIONAL_CACHE: Dict[str, dict] = {}
 BATCH_QUOTE_CACHE: Dict[str, tuple] = {}
 LAST_FETCH_TIME = 0
 CACHE_TTL = 3600 * 4
 
 
+def parse_shares_to_lots(val: Any) -> int:
+    """轉換官方股數為台灣張數 (1 張 = 1000 股)"""
+    if val is None:
+        return 0
+    s = str(val).replace(",", "").replace("+", "").strip()
+    try:
+        shares = int(float(s))
+        return int(round(shares / 1000))
+    except Exception:
+        return 0
+
+
 # ==========================================
-# 1. 全市場快取引擎 (TWSE + TPEx)
+# 1. 全市場快取引擎 (TWSE + TPEx + 三大法人)
 # ==========================================
 def update_full_market_cache():
-    global STOCK_DATABASE, OTC_SYMBOLS, FUNDAMENTAL_CACHE, LAST_FETCH_TIME
+    global STOCK_DATABASE, OTC_SYMBOLS, FUNDAMENTAL_CACHE, INSTITUTIONAL_CACHE, LAST_FETCH_TIME
     now = time.time()
     if FUNDAMENTAL_CACHE and (now - LAST_FETCH_TIME) < CACHE_TTL:
         return
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # 上市
+    # A. 證交所上市股票與 ETF 清單
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -87,7 +80,7 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # TWSE 本益比與殖利率
+    # B. 證交所本益比與殖利率
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -107,7 +100,29 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # TPEx 上櫃
+    # C. 證交所三大法人買賣超 (T86 官方日報表)
+    try:
+        resp = requests.get("https://openapi.twse.com.tw/v1/fund/T86", headers=headers, timeout=6)
+        if resp.status_code == 200:
+            for item in resp.json():
+                code = str(item.get("Code", "")).strip()
+                if not code:
+                    continue
+                foreign = parse_shares_to_lots(item.get("ForeignInvestorsTotal") or item.get("ForeignInvestors") or 0)
+                trust = parse_shares_to_lots(item.get("InvestmentTrustTotal") or item.get("InvestmentTrust") or 0)
+                dealer = parse_shares_to_lots(item.get("DealerTotal") or item.get("Dealer") or 0)
+                total = parse_shares_to_lots(item.get("Total") or (foreign * 1000 + trust * 1000 + dealer * 1000))
+                
+                INSTITUTIONAL_CACHE[code] = {
+                    "foreign": foreign,
+                    "trust": trust,
+                    "dealer": dealer,
+                    "total": total
+                }
+    except Exception as e:
+        print(f"[TWSE 三大法人] 讀取跳過: {e}")
+
+    # D. 櫃買中心上櫃清單與三大法人
     try:
         resp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -129,7 +144,28 @@ def update_full_market_cache():
     except Exception:
         pass
 
+    try:
+        resp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_institutional_investors", headers=headers, timeout=6)
+        if resp.status_code == 200:
+            for item in resp.json():
+                code = str(item.get("SecuritiesCompanyCode") or item.get("Code", "")).strip()
+                if not code:
+                    continue
+                foreign = parse_shares_to_lots(item.get("ForeignInvestorsTotal") or 0)
+                trust = parse_shares_to_lots(item.get("InvestmentTrustTotal") or 0)
+                dealer = parse_shares_to_lots(item.get("DealerTotal") or 0)
+                total = parse_shares_to_lots(item.get("Total") or (foreign * 1000 + trust * 1000 + dealer * 1000))
+                INSTITUTIONAL_CACHE[code] = {
+                    "foreign": foreign,
+                    "trust": trust,
+                    "dealer": dealer,
+                    "total": total
+                }
+    except Exception:
+        pass
+
     LAST_FETCH_TIME = now
+    print(f"[市場快取完成] 股票庫: {len(STOCK_DATABASE)} 檔 | 三大法人庫: {len(INSTITUTIONAL_CACHE)} 檔")
 
 
 @app.on_event("startup")
@@ -230,10 +266,9 @@ def get_service_worker():
 
 
 # ==========================================
-# 4. 核心 API 端點（整合量化訊號與成交量）
+# 4. 核心 API 端點
 # ==========================================
 def fetch_single_quote(symbol: str) -> dict:
-    """單檔股票即時行情、量能與 AI 量化訊號分析 (具備 20s 快取)"""
     clean_sym = symbol.strip().upper().split(".")[0]
     now = time.time()
     if clean_sym in BATCH_QUOTE_CACHE:
@@ -252,7 +287,6 @@ def fetch_single_quote(symbol: str) -> dict:
     signal = "區間整理"
 
     try:
-        # 下載近 1 個月資料以計算均線、RSI 與量能比
         df = yf.download(ticker, period="1mo", interval="1d", progress=False, auto_adjust=False)
         if df.empty:
             alt_ticker = ticker.replace(".TW", ".TWO") if ticker.endswith(".TW") else ticker.replace(".TWO", ".TW")
@@ -280,7 +314,6 @@ def fetch_single_quote(symbol: str) -> dict:
             ma20 = float(df['Close'].tail(20).mean()) if len(df) >= 20 else ma5
             rsi_val = calculate_rsi(df['Close'], period=14)
 
-            # AI 量化訊號簡易判斷
             if price > ma20 and vol_ratio >= 1.3:
                 signal = "帶量突破"
             elif price > ma20 and ma5 > ma20 and rsi_val > 50:
@@ -299,7 +332,6 @@ def fetch_single_quote(symbol: str) -> dict:
     except Exception as e:
         print(f"[行情例外] {clean_sym}: {e}")
 
-    # 格式化成交量為易讀文字 (如: 3.8萬張 或 8,520張)
     if volume_lots >= 10000:
         vol_str = f"{round(volume_lots / 10000, 1)}萬張 ({vol_ratio}x)"
     elif volume_lots > 0:
@@ -407,6 +439,7 @@ def get_kline(symbol: str):
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
+    clean_sym = symbol.split('.')[0].strip()
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
@@ -462,6 +495,11 @@ def get_signal(symbol: str):
         potential_risk = max(latest_close - stop_loss, 0.1)
         rr_ratio = round(potential_reward / potential_risk, 1)
 
+        # 讀取三大法人籌碼
+        inst_data = INSTITUTIONAL_CACHE.get(clean_sym, {
+            "foreign": 0, "trust": 0, "dealer": 0, "total": 0
+        })
+
         reasons = []
         signal = "區間整理 (NEUTRAL HOLD)"
 
@@ -469,6 +507,17 @@ def get_signal(symbol: str):
             reasons.append("股價站穩月線 (MA20) 之上，維持多方走勢")
         else:
             reasons.append("股價位於月線 (MA20) 之下，短線偏弱整理")
+
+        # 籌碼面量化點評
+        if inst_data["trust"] > 300:
+            reasons.append(f"投信積極認養加碼 (買超 {inst_data['trust']:,} 張)，內資法人籌碼集中")
+        elif inst_data["trust"] < -300:
+            reasons.append(f"投信調節持股 (賣超 {abs(inst_data['trust']):,} 張)")
+
+        if inst_data["foreign"] > 1500:
+            reasons.append(f"外資積極回補買超 ({inst_data['foreign']:,} 張)，買盤動能強勁")
+        elif inst_data["foreign"] < -1500:
+            reasons.append(f"外資調節賣壓 (賣超 {abs(inst_data['foreign']):,} 張)，提防壓盤")
 
         if rsi_val >= 70:
             reasons.append("RSI 超買警戒，短線不追高，宜拉回買進")
@@ -480,10 +529,11 @@ def get_signal(symbol: str):
         if vol_ratio >= 1.3:
             reasons.append(f"成交量放大 (量能比 {vol_ratio}x)，交投熱絡")
 
-        if latest_close > ma20 and ma5 > ma20 and rsi_val > 50:
-            signal = "多頭持有 (BULLISH HOLD)"
-        elif latest_close > ma20 and vol_ratio >= 1.3:
+        # 訊號判定
+        if latest_close > ma20 and vol_ratio >= 1.3 and (inst_data["total"] >= 0):
             signal = "帶量突破 (BUY)"
+        elif latest_close > ma20 and ma5 > ma20 and rsi_val > 50:
+            signal = "多頭持有 (BULLISH HOLD)"
         elif latest_close < ma20 and ma5 < ma20:
             signal = "空頭防守 (BEARISH AVOID)"
 
@@ -504,6 +554,7 @@ def get_signal(symbol: str):
             "target_roi": f"+{target_roi}%" if target_roi > 0 else f"{target_roi}%",
             "stop_loss_price": stop_loss,
             "risk_reward": f"1 : {rr_ratio}",
+            "institutional": inst_data,
             "signal": signal,
             "reasons": reasons
         }
