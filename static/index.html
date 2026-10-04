@@ -292,7 +292,7 @@
           </div>
         </div>
 
-        <!-- 第四層：營運動能 · 最新單月營收與成長率 -->
+        <!-- 第四層：營運動能 · 最新單月營收與成長率 (含 ETF 專屬標示) -->
         <div class="flex flex-col gap-1.5">
           <div class="flex justify-between items-center px-0.5">
             <span class="text-[11px] font-semibold text-amber-400 tracking-wider flex items-center gap-1">
@@ -785,9 +785,31 @@
           formatInstValue('instTotal', sig.institutional.total);
         }
 
-        // 渲染月營收與動能體質面板
-        if (sig.revenue) {
-          document.getElementById('revMonthBadge').innerText = sig.revenue.date_roc || '--';
+        // 渲染月營收與動能體質面板 (含 ETF 專屬防呆判定)
+        const isETF = symbol.startsWith('00') || (sig.market === 'ETF');
+
+        if (isETF) {
+          document.getElementById('revMonthBadge').innerText = 'ETF 標的';
+          document.getElementById('revAmount').innerText = '指數型基金';
+          
+          const yoyEl = document.getElementById('revYoY');
+          yoyEl.innerText = '不適用';
+          yoyEl.className = 'text-xs font-mono font-bold text-zinc-500 mt-0.5';
+
+          const momEl = document.getElementById('revMoM');
+          momEl.innerText = '不適用';
+          momEl.className = 'text-xs font-mono font-bold text-zinc-500 mt-0.5';
+
+          const statusEl = document.getElementById('revStatus');
+          statusEl.innerText = '追蹤標的指數';
+          statusEl.className = 'text-xs font-bold text-amber-400 mt-0.5';
+
+        } else if (sig.revenue) {
+          let mText = sig.revenue.date_roc || '--';
+          if (mText.length === 5) {
+            mText = `${mText.slice(0, 3)}/${mText.slice(3)}`;
+          }
+          document.getElementById('revMonthBadge').innerText = mText;
           document.getElementById('revAmount').innerText = sig.revenue.revenue_str || '--';
 
           const yoyEl = document.getElementById('revYoY');
