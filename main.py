@@ -17,8 +17,8 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合自選清單、三大法人籌碼、月營收 YoY/MoM、TradingView 與量化實戰點位",
-    version="6.5.0"
+    description="整合雙視圖自選清單、三大法人籌碼、月營收 YoY/MoM、季線 MA60 與乖離率終端",
+    version="7.0.0"
 )
 
 app.add_middleware(
@@ -315,7 +315,7 @@ def get_service_worker():
 
 
 # ==========================================
-# 4. 核心量化與行情端點
+# 4. 核心量化與行情端點 (含 MA60 & 乖離率)
 # ==========================================
 def fetch_single_quote(symbol: str) -> dict:
     clean_sym = symbol.strip().upper().split(".")[0]
@@ -441,6 +441,7 @@ def search_stocks(q: str = Query(..., min_length=1)):
 
 @app.get("/api/stocks/{symbol}/kline")
 def get_kline(symbol: str):
+    """TradingView 專用 K 線、成交量與 MA5/MA20/MA60 均線資料端點"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
@@ -458,8 +459,9 @@ def get_kline(symbol: str):
         df = df.dropna(subset=['Close'])
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA60'] = df['Close'].rolling(window=60).mean()
 
-        kline_data, volume_data, ma5_data, ma20_data = [], [], [], []
+        kline_data, volume_data, ma5_data, ma20_data, ma60_data = [], [], [], [], []
 
         for idx, row in df.iterrows():
             date_str = idx.strftime("%Y-%m-%d")
@@ -474,6 +476,8 @@ def get_kline(symbol: str):
                 ma5_data.append({"time": date_str, "value": round(float(row['MA5']), 2)})
             if not np.isnan(row['MA20']):
                 ma20_data.append({"time": date_str, "value": round(float(row['MA20']), 2)})
+            if not np.isnan(row['MA60']):
+                ma60_data.append({"time": date_str, "value": round(float(row['MA60']), 2)})
 
         return {
             "symbol": symbol,
@@ -481,6 +485,7 @@ def get_kline(symbol: str):
             "volume": volume_data,
             "ma5": ma5_data,
             "ma20": ma20_data,
+            "ma60": ma60_data,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"K 線資料處理失敗: {str(e)}")
@@ -554,14 +559,19 @@ def get_monthly_revenue(symbol: str):
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
+    """
+    綜合量化訊號核心端點：
+    包含行情四價、量能、點位、三大法人、營收動能、季線 MA60 與乖離率
+    """
     clean_sym = symbol.split('.')[0].strip()
     try:
         ticker = get_ticker_symbol(symbol)
-        df = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
+        # 擴充為 6 個月，確保季線 MA60 具備足夠交易日
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
 
         if df.empty:
             alt_ticker = ticker.replace(".TW", ".TWO") if ticker.endswith(".TW") else ticker.replace(".TWO", ".TW")
-            df = yf.download(alt_ticker, period="3mo", interval="1d", progress=False, auto_adjust=False)
+            df = yf.download(alt_ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
 
         if df.empty or len(df) < 5:
             raise HTTPException(status_code=404, detail="資料天數不足以計算指標")
@@ -578,6 +588,7 @@ def get_signal(symbol: str):
         change = round(latest_close - prev_close, 2)
         change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
 
+        # 行情四價與成交張數
         open_price = round(float(latest_row['Open']), 2)
         high_price = round(float(latest_row['High']), 2)
         low_price = round(float(latest_row['Low']), 2)
@@ -586,7 +597,11 @@ def get_signal(symbol: str):
 
         ma5 = float(df['Close'].tail(5).mean())
         ma20 = float(df['Close'].tail(20).mean()) if len(df) >= 20 else ma5
+        ma60 = float(df['Close'].tail(60).mean()) if len(df) >= 60 else None
         rsi_val = calculate_rsi(df['Close'], period=14)
+
+        # 季線乖離率計算
+        bias60 = round(((latest_close - ma60) / ma60) * 100, 2) if ma60 else None
 
         vol_avg5 = float(df['Volume'].tail(5).mean()) if len(df) >= 5 else volume_today_shares
         vol_ratio = round(volume_today_shares / vol_avg5, 2) if vol_avg5 > 0 else 1.0
@@ -594,6 +609,7 @@ def get_signal(symbol: str):
         recent_low_10 = float(df['Low'].tail(10).min())
         recent_high_20 = float(df['High'].tail(20).max())
 
+        # 量化實戰點位計算
         stop_loss = round(min(ma20, recent_low_10 * 0.99), 2)
         if stop_loss >= latest_close:
             stop_loss = round(latest_close * 0.96, 2)
@@ -621,14 +637,29 @@ def get_signal(symbol: str):
         reasons = []
         signal = "區間整理 (NEUTRAL HOLD)"
 
+        # 趨勢架構判定
         if latest_close >= ma20:
-            reasons.append("股價站穩月線 (MA20) 之上，維持多方走勢")
+            reasons.append("股價站穩月線 (MA20) 之上，短線維持多方")
         else:
             reasons.append("股價位於月線 (MA20) 之下，短線偏弱整理")
 
+        # 季線生命線與乖離率點評
+        if ma60:
+            if latest_close >= ma60:
+                reasons.append("站穩季線 (MA60 生命線) 之上，中長線多頭架構完好")
+            else:
+                reasons.append("跌破季線 (MA60 生命線)，中長線架構轉弱整理")
+
+            if bias60 >= 15:
+                reasons.append(f"季線正乖離過大 (+{bias60}%)，技術面過熱，嚴防追高拉回風險")
+            elif bias60 <= -15:
+                reasons.append(f"季線負乖離過大 ({bias60}%)，短線超跌，慎防弱勢亦醞釀反彈")
+            elif abs(bias60) <= 3:
+                reasons.append(f"股價貼近季線生命線 (乖離率 {bias60}%)，測試中期關鍵支撐")
+
         # 籌碼面客觀評論
         if inst_data["trust"] > 300:
-            reasons.append(f"投信積極認養加碼 (買超 {inst_data['trust']:,} 張)，內資法人籌碼集中")
+            reasons.append(f"投信積極認養加碼 (買超 {inst_data['trust']:,} 張)，內資籌碼集中")
         elif inst_data["trust"] < -300:
             reasons.append(f"投信調節持股 (賣超 {abs(inst_data['trust']):,} 張)")
 
@@ -637,7 +668,7 @@ def get_signal(symbol: str):
         elif inst_data["foreign"] < -1500:
             reasons.append(f"外資調節賣壓 (賣超 {abs(inst_data['foreign']):,} 張)，提防壓盤")
 
-        # 營收動能客觀評論 (精確四捨五入至小數後兩位)
+        # 營收動能評論
         yoy_rounded = None
         mom_rounded = None
         if rev_data and rev_data.get("yoy") is not None:
@@ -658,14 +689,19 @@ def get_signal(symbol: str):
         if vol_ratio >= 1.3:
             reasons.append(f"成交量放大 (量能比 {vol_ratio}x)，交投熱絡")
 
-        # 量化綜合訊號評級
+        # 綜合訊號評級 (融入季線過熱防守)
         is_rev_pos = yoy_rounded > 0 if yoy_rounded is not None else True
         if latest_close > ma20 and vol_ratio >= 1.3 and (inst_data["total"] >= 0 or is_rev_pos):
-            signal = "帶量突破 (BUY)"
+            if bias60 is not None and bias60 >= 16:
+                signal = "乖離過熱 (CAUTION)"
+            else:
+                signal = "帶量突破 (BUY)"
         elif latest_close > ma20 and ma5 > ma20 and rsi_val > 50:
             signal = "多頭持有 (BULLISH HOLD)"
         elif latest_close < ma20 and ma5 < ma20:
             signal = "空頭防守 (BEARISH AVOID)"
+
+        bias_str = f"{'+' if bias60 > 0 else ''}{bias60}%" if bias60 is not None else "--"
 
         return {
             "symbol": symbol,
@@ -679,6 +715,9 @@ def get_signal(symbol: str):
             "volume_lots": volume_lots,
             "volume_ratio": vol_ratio,
             "rsi": rsi_val,
+            "ma60": round(ma60, 2) if ma60 else None,
+            "bias60": bias60,
+            "bias60_str": bias_str,
             "buy_range": buy_range_str,
             "target_price": target_price,
             "target_roi": f"+{target_roi}%" if target_roi > 0 else f"{target_roi}%",
@@ -752,7 +791,7 @@ def get_fundamental(symbol: str):
 
 
 # ==========================================
-# 5. 前端靜態託管
+# 5. 前端靜態託管與入口
 # ==========================================
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
