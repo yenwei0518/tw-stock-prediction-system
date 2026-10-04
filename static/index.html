@@ -44,15 +44,15 @@
       transform: scale(0.98);
     }
     .sortable-chosen {
-      border-color: #10b981 !important;
-      background-color: rgba(16, 185, 129, 0.08) !important;
+      border-color: #ef4444 !important;
+      background-color: rgba(239, 68, 68, 0.08) !important;
       box-shadow: 0 12px 24px -6px rgba(0, 0, 0, 0.7);
       transform: scale(1.02);
       cursor: grabbing !important;
     }
   </style>
 </head>
-<body class="min-h-screen flex flex-col md:flex-row antialiased overflow-x-hidden selection:bg-emerald-500 selection:text-white">
+<body class="min-h-screen flex flex-col md:flex-row antialiased overflow-x-hidden selection:bg-red-500 selection:text-white">
 
   <!-- 手機版側邊欄遮罩 -->
   <div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden md:hidden transition-opacity"></div>
@@ -86,10 +86,10 @@
           <input type="checkbox" id="toggleMA20" checked onchange="handleIndicatorToggle()" class="accent-purple-400 w-4 h-4 cursor-pointer rounded">
         </label>
         <label class="flex items-center justify-between cursor-pointer">
-          <span class="flex items-center gap-2 text-emerald-400">
-            <span class="w-2.5 h-1 bg-emerald-500 rounded-full"></span> 成交量柱狀圖
+          <span class="flex items-center gap-2 text-red-400">
+            <span class="w-2.5 h-1 bg-red-500 rounded-full"></span> 成交量柱狀圖
           </span>
-          <input type="checkbox" id="toggleVolume" checked onchange="handleIndicatorToggle()" class="accent-emerald-400 w-4 h-4 cursor-pointer rounded">
+          <input type="checkbox" id="toggleVolume" checked onchange="handleIndicatorToggle()" class="accent-red-400 w-4 h-4 cursor-pointer rounded">
         </label>
       </div>
     </div>
@@ -100,13 +100,13 @@
       <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex flex-col gap-3 text-xs">
         <div>
           <span class="text-zinc-500 text-[10px]">預計進場股數 (1張 = 1,000股)</span>
-          <input id="calcShares" type="number" value="1000" step="100" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 mt-1 text-white outline-none focus:border-emerald-500 font-mono">
+          <input id="calcShares" type="number" value="1000" step="100" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 mt-1 text-white outline-none focus:border-red-500 font-mono">
         </div>
         <div>
           <span class="text-zinc-500 text-[10px]">買進成本 (TWD)</span>
-          <input id="calcBuyPrice" type="number" step="0.5" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 mt-1 text-white outline-none focus:border-emerald-500 font-mono">
+          <input id="calcBuyPrice" type="number" step="0.5" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 mt-1 text-white outline-none focus:border-red-500 font-mono">
         </div>
-        <button onclick="calculateTradeMetrics()" class="w-full bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 py-1.5 rounded-lg font-medium transition">
+        <button onclick="calculateTradeMetrics()" class="w-full bg-red-950/80 hover:bg-red-900 text-red-300 border border-red-800 py-1.5 rounded-lg font-medium transition">
           計算損益與防守位
         </button>
         <div id="calcResults" class="hidden border-t border-zinc-800 pt-2 flex flex-col gap-1.5 text-[11px]">
@@ -116,7 +116,7 @@
           </div>
           <div class="flex justify-between text-zinc-400">
             <span>觸及停損預估損失：</span>
-            <span id="estimatedRiskLoss" class="font-mono text-red-400">--</span>
+            <span id="estimatedRiskLoss" class="font-mono text-emerald-400">--</span>
           </div>
         </div>
       </div>
@@ -126,34 +126,34 @@
   <!-- 右側主要操作區域 -->
   <main class="flex-1 flex flex-col p-3 sm:p-6 max-w-4xl mx-auto w-full gap-3">
     
-    <!-- 頂部共用導航與搜尋列 -->
+    <!-- 頂部導航與搜尋列 -->
     <header class="flex flex-col gap-2.5">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
           <button onclick="toggleSidebar()" class="p-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-zinc-300 transition" title="打開工具側欄">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
           </button>
-          <h1 onclick="showWatchlistView()" class="text-xl font-bold tracking-wider text-emerald-400 flex items-center gap-1.5 cursor-pointer">
+          <h1 onclick="showWatchlistView()" class="text-xl font-bold tracking-wider text-red-400 flex items-center gap-1.5 cursor-pointer">
             <span>📈</span> QUANT STOCK
           </h1>
-          <div class="flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full" id="statusPill">
-            <span id="liveDot" class="w-2 h-2 rounded-full bg-emerald-400 pulse-live"></span>
-            <span id="refreshTimer" class="text-[10px] text-emerald-300 font-mono">10s 刷新</span>
+          <div class="flex items-center gap-1.5 bg-red-950/60 border border-red-800/60 px-2 py-0.5 rounded-full" id="statusPill">
+            <span id="liveDot" class="w-2 h-2 rounded-full bg-red-500 pulse-live"></span>
+            <span id="refreshTimer" class="text-[10px] text-red-300 font-mono">10s 刷新</span>
           </div>
         </div>
         <span id="lastUpdated" class="text-[11px] text-zinc-500 font-mono">--:--:--</span>
       </div>
 
-      <!-- 股票搜尋列 -->
+      <!-- 股票即時搜尋列 -->
       <div class="relative">
-        <div class="flex items-center bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 focus-within:border-emerald-500 transition">
+        <div class="flex items-center bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2.5 focus-within:border-red-500 transition">
           <svg class="w-5 h-5 text-zinc-400 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
           <input 
             id="searchInput" 
             type="text" 
-            placeholder="搜尋股票代號或名稱 (支援全台股 2,500+ 檔，例: 3008, 大立光, 2330)" 
+            placeholder="搜尋股票代號或名稱 (全台股 2,500+ 檔，例: 2330, 台積電, 聯發科)" 
             class="bg-transparent text-sm w-full outline-none text-white placeholder-zinc-500"
             autocomplete="off"
           >
@@ -175,7 +175,7 @@
       </div>
 
       <div id="watchlistCardList" class="flex flex-col gap-2.5 overflow-y-auto no-scrollbar">
-        <!-- 動態渲染卡片 -->
+        <!-- 動態渲染卡片清單 -->
       </div>
     </section>
 
@@ -185,7 +185,7 @@
     <div id="detailView" class="hidden flex flex-col gap-3">
       
       <div class="flex items-center justify-between">
-        <button onclick="showWatchlistView()" class="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 font-medium px-3 py-1.5 bg-emerald-950/40 border border-emerald-800/50 rounded-xl transition">
+        <button onclick="showWatchlistView()" class="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 font-medium px-3 py-1.5 bg-red-950/40 border border-red-800/50 rounded-xl transition">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
           返回自選清單
         </button>
@@ -241,7 +241,7 @@
 
         <!-- 第二層：量化實戰買賣決策點位 -->
         <div class="flex flex-col gap-1.5">
-          <span class="text-[11px] font-semibold text-emerald-400 tracking-wider flex items-center gap-1">
+          <span class="text-[11px] font-semibold text-amber-400 tracking-wider flex items-center gap-1">
             <span>🎯</span> 量化實戰點位建議
           </span>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
@@ -264,7 +264,7 @@
           </div>
         </div>
 
-        <!-- NEW 籌碼面：三大法人昨日買賣超 (張) -->
+        <!-- 第三層：籌碼面 · 三大法人昨日買賣超 (張) -->
         <div class="flex flex-col gap-1.5">
           <div class="flex justify-between items-center px-0.5">
             <span class="text-[11px] font-semibold text-amber-400 tracking-wider flex items-center gap-1">
@@ -292,7 +292,35 @@
           </div>
         </div>
 
-        <!-- 技術指標與基本面面板 -->
+        <!-- 第四層：營運動能 · 最新單月營收與成長率 -->
+        <div class="flex flex-col gap-1.5">
+          <div class="flex justify-between items-center px-0.5">
+            <span class="text-[11px] font-semibold text-amber-400 tracking-wider flex items-center gap-1">
+              <span>📊</span> 營運動能 · 最新單月營收
+            </span>
+            <span id="revMonthBadge" class="text-[10px] text-zinc-500 font-mono">--</span>
+          </div>
+          <div class="grid grid-cols-4 gap-2 text-center">
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
+              <span class="text-[10px] text-zinc-400">當月營收</span>
+              <p id="revAmount" class="text-xs font-mono font-bold text-white mt-0.5">--</p>
+            </div>
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
+              <span class="text-[10px] text-zinc-400">營收年增率 (YoY)</span>
+              <p id="revYoY" class="text-xs font-mono font-bold text-zinc-300 mt-0.5">--</p>
+            </div>
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
+              <span class="text-[10px] text-zinc-400">營收月增率 (MoM)</span>
+              <p id="revMoM" class="text-xs font-mono font-bold text-zinc-300 mt-0.5">--</p>
+            </div>
+            <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
+              <span class="text-[10px] text-zinc-400">成長體質評價</span>
+              <p id="revStatus" class="text-xs font-bold text-zinc-400 mt-0.5">--</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 第五層：技術指標與基本面面板 -->
         <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-2 border-t border-zinc-800 text-center">
           <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
             <span class="text-[10px] text-zinc-500">RSI 強弱 (14)</span>
@@ -312,7 +340,7 @@
           </div>
           <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
             <span class="text-[10px] text-zinc-500">現金殖利率</span>
-            <p id="yieldValue" class="text-xs font-semibold text-emerald-400 mt-0.5">--</p>
+            <p id="yieldValue" class="text-xs font-semibold text-red-400 mt-0.5">--</p>
           </div>
           <div class="bg-zinc-950/40 p-1.5 rounded-lg border border-zinc-800/50">
             <span class="text-[10px] text-zinc-500">總市值</span>
@@ -320,6 +348,7 @@
           </div>
         </div>
 
+        <!-- 第六層：AI 量化決策觀點 -->
         <div class="bg-zinc-950/40 p-2.5 rounded-xl text-xs text-zinc-400 border border-zinc-800/50">
           <span class="text-zinc-300 font-medium">量化觀點：</span>
           <span id="signalReason">讀取中...</span>
@@ -376,7 +405,7 @@
       return isWeekday && isTrading;
     }
 
-    // 預設 4 檔核心股票
+    // 預設 4 檔核心追蹤標的
     let watchlist = JSON.parse(localStorage.getItem('my_stocks') || '[]');
     if (watchlist.length === 0) {
       watchlist = [
@@ -433,7 +462,7 @@
         touchStartThreshold: 5,
         ghostClass: 'sortable-ghost',
         chosenClass: 'sortable-chosen',
-        onEnd: function (evt) {
+        onEnd: function () {
           const itemElements = Array.from(container.querySelectorAll('[data-symbol]'));
           const reorderedSymbols = itemElements.map(el => el.getAttribute('data-symbol'));
 
@@ -681,7 +710,6 @@
       }
     }
 
-    // 格式化三大法人數值 (紅買綠賣)
     function formatInstValue(elementId, lots) {
       const el = document.getElementById(elementId);
       if (lots > 0) {
@@ -757,6 +785,52 @@
           formatInstValue('instTotal', sig.institutional.total);
         }
 
+        // 渲染月營收與動能體質面板
+        if (sig.revenue) {
+          document.getElementById('revMonthBadge').innerText = sig.revenue.date_roc || '--';
+          document.getElementById('revAmount').innerText = sig.revenue.revenue_str || '--';
+
+          const yoyEl = document.getElementById('revYoY');
+          if (sig.revenue.yoy !== null && sig.revenue.yoy !== undefined) {
+            const isYUp = sig.revenue.yoy > 0;
+            yoyEl.innerText = `${isYUp ? '+' : ''}${sig.revenue.yoy}%`;
+            yoyEl.className = `text-xs font-mono font-bold mt-0.5 ${isYUp ? 'text-red-500' : 'text-emerald-400'}`;
+          } else {
+            yoyEl.innerText = '--';
+            yoyEl.className = 'text-xs font-mono font-bold text-zinc-500 mt-0.5';
+          }
+
+          const momEl = document.getElementById('revMoM');
+          if (sig.revenue.mom !== null && sig.revenue.mom !== undefined) {
+            const isMUp = sig.revenue.mom > 0;
+            momEl.innerText = `${isMUp ? '+' : ''}${sig.revenue.mom}%`;
+            momEl.className = `text-xs font-mono font-bold mt-0.5 ${isMUp ? 'text-red-500' : 'text-emerald-400'}`;
+          } else {
+            momEl.innerText = '--';
+            momEl.className = 'text-xs font-mono font-bold text-zinc-500 mt-0.5';
+          }
+
+          const statusEl = document.getElementById('revStatus');
+          if (sig.revenue.yoy !== null && sig.revenue.yoy !== undefined) {
+            if (sig.revenue.yoy >= 20) {
+              statusEl.innerText = '高成長股 ⭐';
+              statusEl.className = 'text-xs font-bold text-red-400 mt-0.5';
+            } else if (sig.revenue.yoy <= -15) {
+              statusEl.innerText = '營收衰退 ⚠️';
+              statusEl.className = 'text-xs font-bold text-emerald-400 mt-0.5';
+            } else if (sig.revenue.yoy > 0) {
+              statusEl.innerText = '溫和成長';
+              statusEl.className = 'text-xs font-bold text-amber-300 mt-0.5';
+            } else {
+              statusEl.innerText = '持平震盪';
+              statusEl.className = 'text-xs font-bold text-zinc-400 mt-0.5';
+            }
+          } else {
+            statusEl.innerText = '--';
+            statusEl.className = 'text-xs font-bold text-zinc-500 mt-0.5';
+          }
+        }
+
         document.getElementById('rsiValue').innerText = sig.rsi;
         document.getElementById('volRatioValue').innerText = `${sig.volume_ratio}x`;
         document.getElementById('signalReason').innerText = sig.reasons.length > 0 ? sig.reasons.join('；') : '盤勢平穩，無顯著波動訊號。';
@@ -790,7 +864,7 @@
       if (!isMarketOpen()) {
         timerEl.innerText = "已收盤";
         timerEl.className = "text-[10px] text-zinc-400 font-mono";
-        liveDot.classList.remove('pulse-live', 'bg-emerald-400');
+        liveDot.classList.remove('pulse-live', 'bg-red-500');
         liveDot.classList.add('bg-zinc-500');
         statusPill.className = "flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded-full";
         return;
@@ -798,10 +872,10 @@
 
       secondsLeft = 10;
       timerEl.innerText = `${secondsLeft}s 刷新`;
-      timerEl.className = "text-[10px] text-emerald-300 font-mono";
-      liveDot.classList.add('pulse-live', 'bg-emerald-400');
+      timerEl.className = "text-[10px] text-red-300 font-mono";
+      liveDot.classList.add('pulse-live', 'bg-red-500');
       liveDot.classList.remove('bg-zinc-500');
-      statusPill.className = "flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full";
+      statusPill.className = "flex items-center gap-1.5 bg-red-950/60 border border-red-800/60 px-2 py-0.5 rounded-full";
 
       countdownInterval = setInterval(() => {
         secondsLeft -= 1;
@@ -859,7 +933,7 @@
                   <span class="text-xs text-zinc-400 font-mono">${item.symbol}</span>
                   <span class="text-[10px] text-zinc-500 bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-700/50">${item.market}</span>
                 </div>
-                <button onclick="addFavoriteDirectly('${item.symbol}', '${item.name}', event)" class="text-xs px-2 py-1 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/60 hover:bg-emerald-900 transition">
+                <button onclick="addFavoriteDirectly('${item.symbol}', '${item.name}', event)" class="text-xs px-2 py-1 rounded bg-red-950 text-red-400 border border-red-800/60 hover:bg-red-900 transition">
                   ＋ 追蹤
                 </button>
               </li>

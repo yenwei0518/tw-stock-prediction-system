@@ -17,11 +17,10 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合雙視圖自選清單、三大法人籌碼、月營收 YoY/MoM、TradingView 與量化決策終端",
-    version="6.0.0"
+    description="整合自選清單、三大法人籌碼、月營收 YoY/MoM、TradingView 與量化實戰點位",
+    version="6.5.0"
 )
 
-# 跨域連線配置 (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,7 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 初始預設關注清單（僅保留核心 4 檔）
 DEFAULT_STOCKS = [
     {"symbol": "2330", "name": "台積電", "market": "上市"},
     {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
@@ -38,7 +36,6 @@ DEFAULT_STOCKS = [
     {"symbol": "2317", "name": "鴻海", "market": "上市"},
 ]
 
-# 記憶體全市場快取池
 STOCK_DATABASE: Dict[str, dict] = {s["symbol"]: s for s in DEFAULT_STOCKS}
 OTC_SYMBOLS: set = {"3293", "8069", "6488", "3131", "5483", "6547", "3529", "8299", "6274"}
 FUNDAMENTAL_CACHE: Dict[str, dict] = {}
@@ -46,11 +43,10 @@ INSTITUTIONAL_CACHE: Dict[str, dict] = {}
 REVENUE_CACHE: Dict[str, dict] = {}
 BATCH_QUOTE_CACHE: Dict[str, tuple] = {}
 LAST_FETCH_TIME = 0
-CACHE_TTL = 3600 * 4  # 快取 4 小時
+CACHE_TTL = 3600 * 4
 
 
 def parse_clean_float(val: Any) -> Optional[float]:
-    """清洗數字字串，去除千分位逗號、百分比與無效字元"""
     if val is None:
         return None
     if isinstance(val, (int, float)):
@@ -65,7 +61,6 @@ def parse_clean_float(val: Any) -> Optional[float]:
 
 
 def parse_shares_to_lots(val: Any) -> int:
-    """轉換官方股數為台灣張數 (1 張 = 1,000 股)"""
     num = parse_clean_float(val)
     if num is None:
         return 0
@@ -73,7 +68,6 @@ def parse_shares_to_lots(val: Any) -> int:
 
 
 def format_revenue_str(val: Optional[float]) -> str:
-    """將營收格式化為易讀字串 (元/億/兆)"""
     if val is None or val <= 0:
         return "--"
     real_val = val * 1000 if val < 1e10 else val
@@ -96,7 +90,7 @@ def update_full_market_cache():
 
     headers = {"User-Agent": "Mozilla/5.0"}
 
-    # A. 證交所 (TWSE) 上市股票與 ETF 清單
+    # A. 證交所上市股票與 ETF 清單
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -109,7 +103,7 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # B. 證交所 (TWSE) 本益比與殖利率
+    # B. 證交所本益比與殖利率
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -127,7 +121,7 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # C. 證交所 (TWSE) 三大法人買賣超 (T86 官方日報表)
+    # C. 證交所三大法人買賣超 (T86 官方日報表)
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/fund/T86", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -145,7 +139,7 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # D. 櫃買中心 (TPEx) 上櫃清單、本益比與三大法人
+    # D. 櫃買中心上櫃清單、本益比與三大法人
     try:
         resp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -182,7 +176,7 @@ def update_full_market_cache():
     except Exception:
         pass
 
-    # E. 證交所 (TWSE) 上市公司每月營收彙總 (t187ap05_L)
+    # E. 證交所上市公司每月營業收入彙總 (t187ap05_L)
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap05_L", headers=headers, timeout=8)
         if resp.status_code == 200:
@@ -200,10 +194,10 @@ def update_full_market_cache():
                     "yoy": yoy,
                     "mom": mom
                 }
-    except Exception as e:
-        print(f"[TWSE 月營收] 讀取跳過: {e}")
+    except Exception:
+        pass
 
-    # F. 櫃買中心 (TPEx) 上櫃公司每月營收彙總 (t187ap05_O)
+    # F. 櫃買中心上櫃公司每月營業收入彙總 (t187ap05_O)
     try:
         resp = requests.get("https://www.tpex.org.tw/openapi/v1/t187ap05_O", headers=headers, timeout=8)
         if resp.status_code == 200:
@@ -221,11 +215,10 @@ def update_full_market_cache():
                     "yoy": yoy,
                     "mom": mom
                 }
-    except Exception as e:
-        print(f"[TPEx 月營收] 讀取跳過: {e}")
+    except Exception:
+        pass
 
     LAST_FETCH_TIME = now
-    print(f"[市場快取完成] 股票庫: {len(STOCK_DATABASE)} 檔 | 三大法人: {len(INSTITUTIONAL_CACHE)} 檔 | 月營收: {len(REVENUE_CACHE)} 檔")
 
 
 @app.on_event("startup")
@@ -234,7 +227,6 @@ def startup_event():
 
 
 def get_ticker_symbol(symbol: str) -> str:
-    """自動判定市場：上櫃自動接 .TWO，上市與 ETF 接 .TW"""
     sym = symbol.strip().upper()
     if sym.endswith(".TW") or sym.endswith(".TWO"):
         return sym
@@ -246,7 +238,7 @@ def get_ticker_symbol(symbol: str) -> str:
 
 
 # ==========================================
-# 2. Pydantic v2 模型與輔助計算
+# 2. Pydantic 數據模型
 # ==========================================
 class FundamentalData(BaseModel):
     pe: Optional[float] = None
@@ -304,7 +296,7 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
 
 
 # ==========================================
-# 3. PWA 專屬路由
+# 3. PWA 靜態路由
 # ==========================================
 @app.get("/manifest.json")
 def get_manifest():
@@ -323,10 +315,9 @@ def get_service_worker():
 
 
 # ==========================================
-# 4. 核心 API 端點
+# 4. 核心量化與行情端點
 # ==========================================
 def fetch_single_quote(symbol: str) -> dict:
-    """單檔股票即時行情、量能與 AI 量化訊號分析 (具備 20s 快取)"""
     clean_sym = symbol.strip().upper().split(".")[0]
     now = time.time()
     if clean_sym in BATCH_QUOTE_CACHE:
@@ -413,7 +404,6 @@ def fetch_single_quote(symbol: str) -> dict:
 
 @app.get("/api/stocks/batch-quotes")
 def get_batch_quotes(symbols: str = Query(..., description="逗號分隔股票代號")):
-    """自選清單批次即時行情查詢 (多執行緒高速並行)"""
     sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
     if not sym_list:
         return []
@@ -426,7 +416,6 @@ def get_batch_quotes(symbols: str = Query(..., description="逗號分隔股票�
 
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(..., min_length=1)):
-    """支援全台股 2,500+ 檔標的之模糊搜尋"""
     if len(STOCK_DATABASE) <= len(DEFAULT_STOCKS):
         update_full_market_cache()
 
@@ -452,7 +441,6 @@ def search_stocks(q: str = Query(..., min_length=1)):
 
 @app.get("/api/stocks/{symbol}/kline")
 def get_kline(symbol: str):
-    """TradingView 專用 K 線、成交量與均線資料端點"""
     try:
         ticker = get_ticker_symbol(symbol)
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
@@ -500,11 +488,9 @@ def get_kline(symbol: str):
 
 @app.get("/api/stocks/{symbol}/revenue")
 def get_monthly_revenue(symbol: str):
-    """取得特定個股最新月營收與歷史指標"""
     clean_sym = symbol.split('.')[0].strip()
     rev_info = REVENUE_CACHE.get(clean_sym)
     
-    # 若快取無資料，向公開資訊觀測站 MOPS 發送備援請求
     if not rev_info:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -544,7 +530,9 @@ def get_monthly_revenue(symbol: str):
             "status": "暫無營收資料"
         }
 
-    yoy_val = rev_info.get("yoy")
+    yoy_val = round(float(rev_info["yoy"]), 2) if rev_info.get("yoy") is not None else None
+    mom_val = round(float(rev_info["mom"]), 2) if rev_info.get("mom") is not None else None
+
     status_label = "營收持平"
     if yoy_val is not None:
         if yoy_val >= 20:
@@ -559,17 +547,13 @@ def get_monthly_revenue(symbol: str):
         "date_roc": rev_info.get("date_roc", "--"),
         "revenue_str": format_revenue_str(rev_info.get("revenue")),
         "yoy": yoy_val,
-        "mom": rev_info.get("mom"),
+        "mom": mom_val,
         "status": status_label
     }
 
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
-    """
-    綜合量化訊號核心端點：
-    包含行情四價、量能、買賣點位、三大法人買賣超與月營收動能點評
-    """
     clean_sym = symbol.split('.')[0].strip()
     try:
         ticker = get_ticker_symbol(symbol)
@@ -594,7 +578,6 @@ def get_signal(symbol: str):
         change = round(latest_close - prev_close, 2)
         change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
 
-        # 第一層：行情四價與成交張數
         open_price = round(float(latest_row['Open']), 2)
         high_price = round(float(latest_row['High']), 2)
         low_price = round(float(latest_row['Low']), 2)
@@ -611,7 +594,6 @@ def get_signal(symbol: str):
         recent_low_10 = float(df['Low'].tail(10).min())
         recent_high_20 = float(df['High'].tail(20).max())
 
-        # 第二層：量化實戰點位計算
         stop_loss = round(min(ma20, recent_low_10 * 0.99), 2)
         if stop_loss >= latest_close:
             stop_loss = round(latest_close * 0.96, 2)
@@ -628,12 +610,12 @@ def get_signal(symbol: str):
         potential_risk = max(latest_close - stop_loss, 0.1)
         rr_ratio = round(potential_reward / potential_risk, 1)
 
-        # 讀取三大法人籌碼
+        # 籌碼面資料
         inst_data = INSTITUTIONAL_CACHE.get(clean_sym, {
             "foreign": 0, "trust": 0, "dealer": 0, "total": 0
         })
 
-        # 讀取月營收資料
+        # 月營收動能資料
         rev_data = REVENUE_CACHE.get(clean_sym)
 
         reasons = []
@@ -644,7 +626,7 @@ def get_signal(symbol: str):
         else:
             reasons.append("股價位於月線 (MA20) 之下，短線偏弱整理")
 
-        # 籌碼面點評
+        # 籌碼面客觀評論
         if inst_data["trust"] > 300:
             reasons.append(f"投信積極認養加碼 (買超 {inst_data['trust']:,} 張)，內資法人籌碼集中")
         elif inst_data["trust"] < -300:
@@ -655,13 +637,16 @@ def get_signal(symbol: str):
         elif inst_data["foreign"] < -1500:
             reasons.append(f"外資調節賣壓 (賣超 {abs(inst_data['foreign']):,} 張)，提防壓盤")
 
-        # 基本面動能 (月營收 YoY) 點評
+        # 營收動能客觀評論 (精確四捨五入至小數後兩位)
+        yoy_rounded = None
+        mom_rounded = None
         if rev_data and rev_data.get("yoy") is not None:
-            y_val = rev_data["yoy"]
-            if y_val >= 20:
-                reasons.append(f"最新月營收大幅成長 (YoY +{y_val}%)，基本面動能強勁")
-            elif y_val <= -15:
-                reasons.append(f"最新月營收顯著衰退 (YoY {y_val}%)，營運動能鈍化")
+            yoy_rounded = round(float(rev_data["yoy"]), 2)
+            mom_rounded = round(float(rev_data["mom"]), 2) if rev_data.get("mom") is not None else None
+            if yoy_rounded >= 20:
+                reasons.append(f"最新月營收大幅成長 (YoY +{yoy_rounded}%)，基本面動能強勁")
+            elif yoy_rounded <= -15:
+                reasons.append(f"最新月營收顯著衰退 (YoY {yoy_rounded}%)，營運動能鈍化")
 
         if rsi_val >= 70:
             reasons.append("RSI 超買警戒，短線不追高，宜拉回買進")
@@ -673,9 +658,9 @@ def get_signal(symbol: str):
         if vol_ratio >= 1.3:
             reasons.append(f"成交量放大 (量能比 {vol_ratio}x)，交投熱絡")
 
-        # 訊號判定
-        is_strong_rev = rev_data.get("yoy", 0) > 0 if rev_data else True
-        if latest_close > ma20 and vol_ratio >= 1.3 and (inst_data["total"] >= 0 or is_strong_rev):
+        # 量化綜合訊號評級
+        is_rev_pos = yoy_rounded > 0 if yoy_rounded is not None else True
+        if latest_close > ma20 and vol_ratio >= 1.3 and (inst_data["total"] >= 0 or is_rev_pos):
             signal = "帶量突破 (BUY)"
         elif latest_close > ma20 and ma5 > ma20 and rsi_val > 50:
             signal = "多頭持有 (BULLISH HOLD)"
@@ -701,9 +686,10 @@ def get_signal(symbol: str):
             "risk_reward": f"1 : {rr_ratio}",
             "institutional": inst_data,
             "revenue": {
-                "date_roc": rev_data.get("date_roc") if rev_data else "--",
-                "yoy": rev_data.get("yoy") if rev_data else None,
-                "mom": rev_data.get("mom") if rev_data else None,
+                "date_roc": rev_data.get("date_roc", "--") if rev_data else "--",
+                "revenue_str": format_revenue_str(rev_data.get("revenue")) if rev_data else "--",
+                "yoy": yoy_rounded,
+                "mom": mom_rounded,
             },
             "signal": signal,
             "reasons": reasons
@@ -714,7 +700,6 @@ def get_signal(symbol: str):
 
 @app.get("/api/stocks/{symbol}/fundamental")
 def get_fundamental(symbol: str):
-    """基本面取得端點：整合市價、本益比、殖利率、EPS 與月營收成長數據"""
     clean_code = symbol.split('.')[0].strip()
     ticker = get_ticker_symbol(symbol)
     
@@ -744,7 +729,6 @@ def get_fundamental(symbol: str):
     except Exception as e:
         print(f"yfinance 基本面異常: {e}")
 
-    # 快取補齊 PE 與殖利率
     market_info = FUNDAMENTAL_CACHE.get(clean_code)
     if market_info:
         if raw_payload["pe"] is None and market_info.get("pe"):
@@ -752,7 +736,6 @@ def get_fundamental(symbol: str):
         if raw_payload["yield_rate"] is None and market_info.get("yield_rate"):
             raw_payload["yield_rate"] = market_info["yield_rate"]
 
-    # 快取補齊月營收 YoY, MoM 與營收額
     rev_info = REVENUE_CACHE.get(clean_code)
     if rev_info:
         raw_payload["revenue_yoy"] = rev_info.get("yoy")
@@ -769,7 +752,7 @@ def get_fundamental(symbol: str):
 
 
 # ==========================================
-# 5. 前端靜態檔案託管與首頁路由
+# 5. 前端靜態託管
 # ==========================================
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -783,9 +766,6 @@ def serve_index():
     return HTMLResponse("<h1>未找到 index.html 前端檔案，請確認檔案位置。</h1>")
 
 
-# ==========================================
-# 6. 自動適配本機開發與 Render 雲端環境
-# ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
