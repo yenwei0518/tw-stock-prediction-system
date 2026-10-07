@@ -69,7 +69,7 @@
       </button>
     </div>
 
-    <!-- 模組 1：快速切換自選股 (不用跳回上一頁) -->
+    <!-- 模組 1：自選關注股抽屜快速切換 -->
     <div class="flex flex-col gap-2">
       <div class="flex justify-between items-center">
         <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">自選股快速切換</label>
@@ -80,7 +80,7 @@
       </div>
     </div>
 
-    <!-- 模組 2：損益與手續費即時試算機 -->
+    <!-- 模組 2：損益與手續費即時試算機 (具備跨股防呆) -->
     <div class="flex flex-col gap-2.5 pt-2 border-t border-zinc-800/80">
       <label class="text-[11px] font-semibold text-zinc-400 tracking-wider uppercase">交易風控與損益試算</label>
       <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-3 flex flex-col gap-3 text-xs">
@@ -202,7 +202,7 @@
           </div>
         </div>
 
-        <!-- 盤面四價單行跑馬列 (節省 80% 空間) -->
+        <!-- 盤面四價單行跑馬列 -->
         <div class="flex items-center justify-between px-3 py-2 bg-zinc-950/70 border border-zinc-800/80 rounded-xl text-[11px] font-mono text-zinc-400 overflow-x-auto no-scrollbar gap-2">
           <div class="shrink-0">開 <b id="openPrice" class="text-zinc-200">--</b></div>
           <div class="shrink-0">高 <b id="highPrice" class="text-red-400">--</b></div>
@@ -211,7 +211,7 @@
           <div class="shrink-0">量 <b id="todayVolumeLots" class="text-white">--</b></div>
         </div>
 
-        <!-- 🎯 2x2 量化實戰點位建議 (核心常駐) -->
+        <!-- 🎯 2x2 量化實戰點位建議 -->
         <div class="grid grid-cols-2 gap-2 text-center">
           <div class="bg-blue-950/30 border border-blue-800/50 p-2 rounded-xl">
             <span class="text-[10px] text-blue-400">建議買入區間</span>
@@ -232,12 +232,11 @@
         </div>
       </section>
 
-      <!-- TradingView K 線走勢圖 (升至首屏，右上角整合均線膠囊切換) -->
+      <!-- TradingView K 線走勢圖 (三均線膠囊切換) -->
       <section class="bg-zinc-900/90 border border-zinc-800 rounded-2xl p-3 shadow-lg flex flex-col gap-2">
         <div class="flex justify-between items-center px-1">
           <div class="flex items-center gap-2">
             <span class="text-[11px] text-zinc-400 font-medium">走勢圖</span>
-            <!-- 均線膠囊小按鈕 -->
             <button id="pillMA5" onclick="toggleIndicatorPill('MA5')" class="text-[10px] px-2 py-0.5 rounded-full border border-yellow-500/60 bg-yellow-500/20 text-yellow-400 font-mono transition">
               MA5
             </button>
@@ -268,7 +267,7 @@
           </button>
         </div>
 
-        <!-- Tab 內容 1：籌碼法人 (4 格) -->
+        <!-- Tab 內容 1：籌碼法人 (4 格，含無進出防呆) -->
         <div id="tabContent-inst" class="flex flex-col gap-2">
           <div class="grid grid-cols-4 gap-2 text-center">
             <div class="bg-zinc-950/60 border border-zinc-800 p-2 rounded-xl">
@@ -432,7 +431,7 @@
       startPolling(symbol);
     }
 
-    // Tab 標籤切換器
+    // Tab 標籤切換
     function switchTab(tab) {
       const tabs = ['inst', 'rev', 'val'];
       tabs.forEach(t => {
@@ -448,7 +447,7 @@
       });
     }
 
-    // 均線膠囊切換器
+    // 均線膠囊顯隱切換
     function toggleIndicatorPill(type) {
       if (type === 'MA5') {
         isMA5Visible = !isMA5Visible;
@@ -495,7 +494,7 @@
       });
     }
 
-    // 渲染側邊欄自選抽屜 (點擊立即切換股票)
+    // 側邊欄抽屜換股清單
     function renderSidebarWatchlist() {
       const drawer = document.getElementById('sidebarWatchlist');
       const countEl = document.getElementById('sidebarWatchlistCount');
@@ -677,7 +676,7 @@
       }
     }
 
-    // 交易風控與保本試算機 (具備跨股停損防呆與精確費用計算)
+    // 交易風控與保本試算機 (具備跨股防呆與單一負號顯示)
     function calculateTradeMetrics() {
       const shares = parseInt(document.getElementById('calcShares').value) || 1000;
       const buyPrice = parseFloat(document.getElementById('calcBuyPrice').value) || currentLatestPrice;
@@ -691,6 +690,7 @@
       const riskEl = document.getElementById('estimatedRiskLoss');
       let effectiveStopLoss = currentStopLoss;
 
+      // 防呆：若無停損價或大於等於買進價（換股暫存殘留），以 4% 防守底線計算
       if (!effectiveStopLoss || effectiveStopLoss <= 0 || effectiveStopLoss >= buyPrice) {
         effectiveStopLoss = Number((buyPrice * 0.96).toFixed(2));
       }
@@ -825,28 +825,37 @@
           badge.className = "text-xs font-bold font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700";
         }
 
-        // 盤面跑馬欄位
+        // 盤面跑馬資訊
         document.getElementById('openPrice').innerText = sig.open;
         document.getElementById('highPrice').innerText = sig.high;
         document.getElementById('lowPrice').innerText = sig.low;
         document.getElementById('prevClosePrice').innerText = sig.prev_close;
         document.getElementById('todayVolumeLots').innerText = `${sig.volume_lots.toLocaleString()}張`;
 
-        // 量化點位
+        // 量化實戰點位
         document.getElementById('buyRangeValue').innerText = sig.buy_range;
         document.getElementById('targetPriceValue').innerText = `${sig.target_price} (${sig.target_roi})`;
         document.getElementById('stopLossValue').innerText = sig.stop_loss_price;
         document.getElementById('riskRewardValue').innerText = sig.risk_reward;
 
-        // 渲染三大法人籌碼
+        // 渲染三大法人籌碼 (含無進出防呆)
         if (sig.institutional) {
           formatInstValue('instForeign', sig.institutional.foreign);
           formatInstValue('instTrust', sig.institutional.trust);
           formatInstValue('instDealer', sig.institutional.dealer);
           formatInstValue('instTotal', sig.institutional.total);
+
+          const isNoTrade = sig.institutional.foreign === 0 &&
+                            sig.institutional.trust === 0 &&
+                            sig.institutional.dealer === 0;
+          if (isNoTrade) {
+            const totEl = document.getElementById('instTotal');
+            totEl.innerText = "無進出";
+            totEl.className = "text-xs font-mono font-bold text-zinc-500 mt-0.5";
+          }
         }
 
-        // 渲染月營收與動能 (含 ETF 防呆)
+        // 渲染月營收動能 (含 ETF 防呆)
         const isETF = symbol.startsWith('00') || (sig.market === 'ETF');
 
         if (isETF) {
