@@ -2,6 +2,7 @@ import os
 import re
 import time
 import threading
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
@@ -17,10 +18,11 @@ import uvicorn
 
 app = FastAPI(
     title="AI 台股量化決策終端系統",
-    description="整合雙視圖自選清單、三大法人籌碼、月營收 YoY/MoM、季線 MA60 與乖離率終端",
-    version="7.0.0"
+    description="整合自選清單、三大法人真實買賣超回溯、月營收 YoY/MoM、季線 MA60 與量化實戰點位",
+    version="7.5.0"
 )
 
+# 跨域連線配置 (CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,6 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 初始預設關注清單
 DEFAULT_STOCKS = [
     {"symbol": "2330", "name": "台積電", "market": "上市"},
     {"symbol": "0050", "name": "元大台灣50", "market": "ETF"},
@@ -36,6 +39,7 @@ DEFAULT_STOCKS = [
     {"symbol": "2317", "name": "鴻海", "market": "上市"},
 ]
 
+# 記憶體全市場快取池
 STOCK_DATABASE: Dict[str, dict] = {s["symbol"]: s for s in DEFAULT_STOCKS}
 OTC_SYMBOLS: set = {"3293", "8069", "6488", "3131", "5483", "6547", "3529", "8299", "6274"}
 FUNDAMENTAL_CACHE: Dict[str, dict] = {}
@@ -43,10 +47,11 @@ INSTITUTIONAL_CACHE: Dict[str, dict] = {}
 REVENUE_CACHE: Dict[str, dict] = {}
 BATCH_QUOTE_CACHE: Dict[str, tuple] = {}
 LAST_FETCH_TIME = 0
-CACHE_TTL = 3600 * 4
+CACHE_TTL = 3600 * 4  # 快取 4 小時
 
 
 def parse_clean_float(val: Any) -> Optional[float]:
+    """清洗數字字串，去除千分位逗號、百分比與無效字元"""
     if val is None:
         return None
     if isinstance(val, (int, float)):
@@ -61,6 +66,7 @@ def parse_clean_float(val: Any) -> Optional[float]:
 
 
 def parse_shares_to_lots(val: Any) -> int:
+    """轉換官方股數為台灣張數 (1 張 = 1,000 股)"""
     num = parse_clean_float(val)
     if num is None:
         return 0
@@ -68,6 +74,7 @@ def parse_shares_to_lots(val: Any) -> int:
 
 
 def format_revenue_str(val: Optional[float]) -> str:
+    """將營收格式化為易讀字串 (元/億/兆)"""
     if val is None or val <= 0:
         return "--"
     real_val = val * 1000 if val < 1e10 else val
@@ -84,13 +91,16 @@ def format_revenue_str(val: Optional[float]) -> str:
 # ==========================================
 def update_full_market_cache():
     global STOCK_DATABASE, OTC_SYMBOLS, FUNDAMENTAL_CACHE, INSTITUTIONAL_CACHE, REVENUE_CACHE, LAST_FETCH_TIME
-    now = time.time()
-    if FUNDAMENTAL_CACHE and (now - LAST_FETCH_TIME) < CACHE_TTL:
+    now_ts = time.time()
+    if FUNDAMENTAL_CACHE and (now_ts - LAST_FETCH_TIME) < CACHE_TTL:
         return
 
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+    }
 
-    # A. 證交所上市股票與 ETF 清單
+    # A. 證交所 (TWSE) 上市股票與 ETF 清單
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -100,10 +110,10 @@ def update_full_market_cache():
                 if code and name:
                     market = "ETF" if code.startswith("00") else "上市"
                     STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TWSE 清單] 讀取略過: {e}")
 
-    # B. 證交所本益比與殖利率
+    # B. 證交所 (TWSE) 本益比與殖利率
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -114,32 +124,60 @@ def update_full_market_cache():
                     continue
                 if name and code not in STOCK_DATABASE:
                     STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": "上市"}
-
-                pe_val = parse_clean_float(item.get("PEratio"))
-                yield_val = parse_clean_float(item.get("DividendYield"))
-                FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
-    except Exception:
-        pass
-
-    # C. 證交所三大法人買賣超 (T86 官方日報表)
-    try:
-        resp = requests.get("https://openapi.twse.com.tw/v1/fund/T86", headers=headers, timeout=6)
-        if resp.status_code == 200:
-            for item in resp.json():
-                code = str(item.get("Code", "")).strip()
-                if not code:
-                    continue
-                foreign = parse_shares_to_lots(item.get("ForeignInvestorsTotal") or item.get("ForeignInvestors") or 0)
-                trust = parse_shares_to_lots(item.get("InvestmentTrustTotal") or item.get("InvestmentTrust") or 0)
-                dealer = parse_shares_to_lots(item.get("DealerTotal") or item.get("Dealer") or 0)
-                total = parse_shares_to_lots(item.get("Total") or (foreign * 1000 + trust * 1000 + dealer * 1000))
-                INSTITUTIONAL_CACHE[code] = {
-                    "foreign": foreign, "trust": trust, "dealer": dealer, "total": total
+                FUNDAMENTAL_CACHE[code] = {
+                    "pe": parse_clean_float(item.get("PEratio")),
+                    "yield_rate": parse_clean_float(item.get("DividendYield"))
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TWSE 本益比] 讀取略過: {e}")
 
-    # D. 櫃買中心上櫃清單、本益比與三大法人
+    # C. 證交所上市三大法人 (真實 T86 介面，支援自動向前回溯最新交易日)
+    now_dt = datetime.now()
+    for day_offset in range(5):  # 往前回溯 5 天以跨越週末或國定假日
+        target_date = (now_dt - timedelta(days=day_offset)).strftime("%Y%m%d")
+        url = f"https://www.twse.com.tw/rwd/zh/fund/T86?date={target_date}&selectType=ALL&response=json"
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                data_json = resp.json()
+                if data_json.get("stat") == "OK" and "data" in data_json:
+                    fields = data_json.get("fields", [])
+                    code_idx = 0
+                    foreign_idx, trust_idx, dealer_idx, total_idx = 4, 10, 11, len(fields) - 1
+
+                    for idx, f in enumerate(fields):
+                        if "證券代號" in f:
+                            code_idx = idx
+                        elif "外陸資買賣超" in f or "外資買賣超" in f:
+                            foreign_idx = idx
+                        elif "投信買賣超" in f:
+                            trust_idx = idx
+                        elif "自營商買賣超" in f and "避險" not in f and "自行買賣" not in f:
+                            dealer_idx = idx
+                        elif "三大法人買賣超" in f:
+                            total_idx = idx
+
+                    for row in data_json["data"]:
+                        code = str(row[code_idx]).strip()
+                        if not code:
+                            continue
+                        f_lots = parse_shares_to_lots(row[foreign_idx])
+                        t_lots = parse_shares_to_lots(row[trust_idx])
+                        d_lots = parse_shares_to_lots(row[dealer_idx])
+                        tot_lots = parse_shares_to_lots(row[total_idx]) if total_idx < len(row) else (f_lots + t_lots + d_lots)
+
+                        INSTITUTIONAL_CACHE[code] = {
+                            "foreign": f_lots,
+                            "trust": t_lots,
+                            "dealer": d_lots,
+                            "total": tot_lots
+                        }
+                    print(f"[TWSE 法人成功] 基準日: {target_date}，共載入 {len(data_json['data'])} 檔")
+                    break
+        except Exception:
+            continue
+
+    # D. 櫃買中心 (TPEx) 上櫃清單、本益比與三大法人 (真實回溯介面)
     try:
         resp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis", headers=headers, timeout=6)
         if resp.status_code == 200:
@@ -149,34 +187,44 @@ def update_full_market_cache():
                 if not code:
                     continue
                 if name:
-                    market = "ETF" if code.startswith("00") else "上櫃"
-                    STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": market}
+                    STOCK_DATABASE[code] = {"symbol": code, "name": name, "market": "ETF" if code.startswith("00") else "上櫃"}
                 OTC_SYMBOLS.add(code)
-
-                pe_val = parse_clean_float(item.get("PriceEarningRatio") or item.get("PEratio"))
-                yield_val = parse_clean_float(item.get("DividendYield"))
-                FUNDAMENTAL_CACHE[code] = {"pe": pe_val, "yield_rate": yield_val}
-    except Exception:
-        pass
-
-    try:
-        resp = requests.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_institutional_investors", headers=headers, timeout=6)
-        if resp.status_code == 200:
-            for item in resp.json():
-                code = str(item.get("SecuritiesCompanyCode") or item.get("Code", "")).strip()
-                if not code:
-                    continue
-                foreign = parse_shares_to_lots(item.get("ForeignInvestorsTotal") or 0)
-                trust = parse_shares_to_lots(item.get("InvestmentTrustTotal") or 0)
-                dealer = parse_shares_to_lots(item.get("DealerTotal") or 0)
-                total = parse_shares_to_lots(item.get("Total") or (foreign * 1000 + trust * 1000 + dealer * 1000))
-                INSTITUTIONAL_CACHE[code] = {
-                    "foreign": foreign, "trust": trust, "dealer": dealer, "total": total
+                FUNDAMENTAL_CACHE[code] = {
+                    "pe": parse_clean_float(item.get("PriceEarningRatio") or item.get("PEratio")),
+                    "yield_rate": parse_clean_float(item.get("DividendYield"))
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TPEx 本益比] 讀取略過: {e}")
 
-    # E. 證交所上市公司每月營業收入彙總 (t187ap05_L)
+    for day_offset in range(5):
+        target_dt = now_dt - timedelta(days=day_offset)
+        roc_year = target_dt.year - 1911
+        roc_date_str = f"{roc_year}/{target_dt.strftime('%m/%d')}"
+        url = f"https://www.tpex.org.tw/web/stock/34invest/34invest_result.php?l=zh-tw&o=json&d={roc_date_str}&se=EW"
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                data_json = resp.json()
+                aaData = data_json.get("aaData", [])
+                if aaData:
+                    for row in aaData:
+                        if len(row) < 12:
+                            continue
+                        code = str(row[0]).strip()
+                        if not code:
+                            continue
+                        INSTITUTIONAL_CACHE[code] = {
+                            "foreign": parse_shares_to_lots(row[4]),
+                            "trust": parse_shares_to_lots(row[7]),
+                            "dealer": parse_shares_to_lots(row[10]),
+                            "total": parse_shares_to_lots(row[11])
+                        }
+                    print(f"[TPEx 法人成功] 基準日: {roc_date_str}，共載入 {len(aaData)} 檔")
+                    break
+        except Exception:
+            continue
+
+    # E. 證交所 (TWSE) 上市公司月營業收入彙總 (t187ap05_L)
     try:
         resp = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap05_L", headers=headers, timeout=8)
         if resp.status_code == 200:
@@ -184,20 +232,16 @@ def update_full_market_cache():
                 code = str(item.get("公司代號") or item.get("Code", "")).strip()
                 if not code:
                     continue
-                yoy = parse_clean_float(item.get("營業收入-去年同月增減(%)") or item.get("YoY"))
-                mom = parse_clean_float(item.get("營業收入-上月比較增減(%)") or item.get("MoM"))
-                rev = parse_clean_float(item.get("營業收入-當月營收"))
-                date_m = str(item.get("資料年月", "")).strip()
                 REVENUE_CACHE[code] = {
-                    "date_roc": date_m,
-                    "revenue": rev,
-                    "yoy": yoy,
-                    "mom": mom
+                    "date_roc": str(item.get("資料年月", "")).strip(),
+                    "revenue": parse_clean_float(item.get("營業收入-當月營收")),
+                    "yoy": parse_clean_float(item.get("營業收入-去年同月增減(%)") or item.get("YoY")),
+                    "mom": parse_clean_float(item.get("營業收入-上月比較增減(%)") or item.get("MoM"))
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TWSE 月營收] 讀取略過: {e}")
 
-    # F. 櫃買中心上櫃公司每月營業收入彙總 (t187ap05_O)
+    # F. 櫃買中心 (TPEx) 上櫃公司月營業收入彙總 (t187ap05_O)
     try:
         resp = requests.get("https://www.tpex.org.tw/openapi/v1/t187ap05_O", headers=headers, timeout=8)
         if resp.status_code == 200:
@@ -205,20 +249,17 @@ def update_full_market_cache():
                 code = str(item.get("SecuritiesCompanyCode") or item.get("公司代號", "")).strip()
                 if not code:
                     continue
-                yoy = parse_clean_float(item.get("MonthlyRevenueLastYearComparisonPercentage") or item.get("營業收入-去年同月增減(%)"))
-                mom = parse_clean_float(item.get("MonthlyRevenueLastMonthComparisonPercentage") or item.get("營業收入-上月比較增減(%)"))
-                rev = parse_clean_float(item.get("MonthlyRevenue") or item.get("營業收入-當月營收"))
-                date_m = str(item.get("DataYearMonth") or item.get("資料年月", "")).strip()
                 REVENUE_CACHE[code] = {
-                    "date_roc": date_m,
-                    "revenue": rev,
-                    "yoy": yoy,
-                    "mom": mom
+                    "date_roc": str(item.get("DataYearMonth") or item.get("資料年月", "")).strip(),
+                    "revenue": parse_clean_float(item.get("MonthlyRevenue") or item.get("營業收入-當月營收")),
+                    "yoy": parse_clean_float(item.get("MonthlyRevenueLastYearComparisonPercentage") or item.get("營業收入-去年同月增減(%)")),
+                    "mom": parse_clean_float(item.get("MonthlyRevenueLastMonthComparisonPercentage") or item.get("營業收入-上月比較增減(%)"))
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TPEx 月營收] 讀取略過: {e}")
 
-    LAST_FETCH_TIME = now
+    LAST_FETCH_TIME = now_ts
+    print(f"[市場快取完成] 股票庫: {len(STOCK_DATABASE)} 檔 | 三大法人: {len(INSTITUTIONAL_CACHE)} 檔 | 月營收: {len(REVENUE_CACHE)} 檔")
 
 
 @app.on_event("startup")
@@ -227,6 +268,7 @@ def startup_event():
 
 
 def get_ticker_symbol(symbol: str) -> str:
+    """自動判定市場後綴：上櫃為 .TWO，上市與 ETF 為 .TW"""
     sym = symbol.strip().upper()
     if sym.endswith(".TW") or sym.endswith(".TWO"):
         return sym
@@ -238,7 +280,7 @@ def get_ticker_symbol(symbol: str) -> str:
 
 
 # ==========================================
-# 2. Pydantic 數據模型
+# 2. Pydantic 數據模型與計算
 # ==========================================
 class FundamentalData(BaseModel):
     pe: Optional[float] = None
@@ -315,7 +357,7 @@ def get_service_worker():
 
 
 # ==========================================
-# 4. 核心量化與行情端點 (含 MA60 & 乖離率)
+# 4. 核心行情與量化分析端點
 # ==========================================
 def fetch_single_quote(symbol: str) -> dict:
     clean_sym = symbol.strip().upper().split(".")[0]
@@ -496,6 +538,7 @@ def get_monthly_revenue(symbol: str):
     clean_sym = symbol.split('.')[0].strip()
     rev_info = REVENUE_CACHE.get(clean_sym)
     
+    # 若快取無資料，向公開資訊觀測站 MOPS 發送備援請求
     if not rev_info:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -559,14 +602,10 @@ def get_monthly_revenue(symbol: str):
 
 @app.get("/api/stocks/{symbol}/signal")
 def get_signal(symbol: str):
-    """
-    綜合量化訊號核心端點：
-    包含行情四價、量能、點位、三大法人、營收動能、季線 MA60 與乖離率
-    """
     clean_sym = symbol.split('.')[0].strip()
     try:
         ticker = get_ticker_symbol(symbol)
-        # 擴充為 6 個月，確保季線 MA60 具備足夠交易日
+        # 下載 6 個月資料以精確計算 MA60 季線
         df = yf.download(ticker, period="6mo", interval="1d", progress=False, auto_adjust=False)
 
         if df.empty:
@@ -626,7 +665,7 @@ def get_signal(symbol: str):
         potential_risk = max(latest_close - stop_loss, 0.1)
         rr_ratio = round(potential_reward / potential_risk, 1)
 
-        # 籌碼面資料
+        # 籌碼面資料 (三大法人)
         inst_data = INSTITUTIONAL_CACHE.get(clean_sym, {
             "foreign": 0, "trust": 0, "dealer": 0, "total": 0
         })
@@ -657,7 +696,7 @@ def get_signal(symbol: str):
             elif abs(bias60) <= 3:
                 reasons.append(f"股價貼近季線生命線 (乖離率 {bias60}%)，測試中期關鍵支撐")
 
-        # 籌碼面客觀評論
+        # 籌碼面評論
         if inst_data["trust"] > 300:
             reasons.append(f"投信積極認養加碼 (買超 {inst_data['trust']:,} 張)，內資籌碼集中")
         elif inst_data["trust"] < -300:
@@ -689,7 +728,7 @@ def get_signal(symbol: str):
         if vol_ratio >= 1.3:
             reasons.append(f"成交量放大 (量能比 {vol_ratio}x)，交投熱絡")
 
-        # 綜合訊號評級 (融入季線過熱防守)
+        # 綜合訊號判定
         is_rev_pos = yoy_rounded > 0 if yoy_rounded is not None else True
         if latest_close > ma20 and vol_ratio >= 1.3 and (inst_data["total"] >= 0 or is_rev_pos):
             if bias60 is not None and bias60 >= 16:
@@ -768,6 +807,7 @@ def get_fundamental(symbol: str):
     except Exception as e:
         print(f"yfinance 基本面異常: {e}")
 
+    # 快取補齊 PE 與殖利率
     market_info = FUNDAMENTAL_CACHE.get(clean_code)
     if market_info:
         if raw_payload["pe"] is None and market_info.get("pe"):
@@ -775,6 +815,7 @@ def get_fundamental(symbol: str):
         if raw_payload["yield_rate"] is None and market_info.get("yield_rate"):
             raw_payload["yield_rate"] = market_info["yield_rate"]
 
+    # 快取補齊月營收 YoY, MoM 與營收額
     rev_info = REVENUE_CACHE.get(clean_code)
     if rev_info:
         raw_payload["revenue_yoy"] = rev_info.get("yoy")
@@ -805,6 +846,9 @@ def serve_index():
     return HTMLResponse("<h1>未找到 index.html 前端檔案，請確認檔案位置。</h1>")
 
 
+# ==========================================
+# 6. 自動適配本機開發與 Render 雲端環境
+# ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
